@@ -27,6 +27,7 @@ class EspBoxDetector:
         self._cv2: Any | None = None
         self._np: Any | None = None
         self._hog: Any | None = None
+        self._hog_unavailable = False
         self._cascade_cache: dict[str, Any] = {}
 
     def load_image(self, image_path: str):
@@ -136,9 +137,22 @@ class EspBoxDetector:
 
     def _get_hog(self):
         cv2, _ = self._load_cv_stack()
-        if self._hog is None:
-            hog = cv2.HOGDescriptor()
-            hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+        if self._hog is None and not self._hog_unavailable:
+            hog_ctor = getattr(cv2, "HOGDescriptor", None)
+            detector_factory = getattr(
+                cv2,
+                "HOGDescriptor_getDefaultPeopleDetector",
+                None,
+            )
+            if not callable(hog_ctor) or not callable(detector_factory):
+                self._hog_unavailable = True
+                return None
+            try:
+                hog = hog_ctor()
+                hog.setSVMDetector(detector_factory())
+            except Exception:
+                self._hog_unavailable = True
+                return None
             self._hog = hog
         return self._hog
 
@@ -156,12 +170,19 @@ class EspBoxDetector:
 
     def _detect_hog_people(self, image_bgr) -> list[DetectionBox]:
         hog = self._get_hog()
-        rects, weights = hog.detectMultiScale(
-            image_bgr,
-            winStride=(4, 4),
-            padding=(8, 8),
-            scale=1.05,
-        )
+        if hog is None:
+            return []
+        try:
+            rects, weights = hog.detectMultiScale(
+                image_bgr,
+                winStride=(4, 4),
+                padding=(8, 8),
+                scale=1.05,
+            )
+        except Exception:
+            self._hog = None
+            self._hog_unavailable = True
+            return []
 
         detections: list[DetectionBox] = []
         for (x, y, w, h), weight in zip(rects, weights):
