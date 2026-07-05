@@ -2,7 +2,7 @@ name: astrbot_plugin_kuang
 display_name: "框"
 desc: "为图片或用户头像叠加 FPS 外挂透视风格的白色线框。"
 short_desc: "为图片或头像叠加 5 个 FPS 风格白色线框。"
-version: 0.1.0
+version: 0.2.0
 author: WsureDev
 repo: https://github.com/WsureDev/astrbot_plugin_kuang
 astrbot_version: ">=4.5.7"

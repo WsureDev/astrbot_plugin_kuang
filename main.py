@@ -17,19 +17,36 @@ _DEFAULT_QQ_AVATAR = "https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
     "kuang",
     "WsureDev",
     "为图片叠加 FPS 外挂透视风格白色线框",
-    "0.1.0",
+    "0.2.0",
     "https://github.com/WsureDev/astrbot_plugin_kuang",
 )
 class KuangPlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
-        self.output_dir = StarTools.get_data_dir(_PLUGIN_NAME) / "output"
+        self.plugin_data_dir = StarTools.get_data_dir(_PLUGIN_NAME)
+        self.output_dir = self.plugin_data_dir / "output"
+        self.model_dir = self.plugin_data_dir / "models"
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.model_dir.mkdir(parents=True, exist_ok=True)
 
         self.debug_mode = bool(self.config.get("debug_mode", False))
+        configured_model_path = str(self.config.get("model_path", "")).strip()
+        model_path = (
+            configured_model_path
+            if configured_model_path
+            else str(self.model_dir / "yolo26n.onnx")
+        )
         self.detector = EspBoxDetector(
             box_count=int(self.config.get("box_count", 5)),
+            model_path=model_path,
+            model_url=str(self.config.get("model_url", "")).strip(),
+            auto_download_model=bool(self.config.get("auto_download_model", True)),
+            confidence_threshold=float(
+                self.config.get("confidence_threshold", 0.25)
+            ),
+            nms_iou_threshold=float(self.config.get("detector_iou_threshold", 0.45)),
+            model_input_size=int(self.config.get("model_input_size", 640)),
             random_width_ratio_min=float(
                 self.config.get("random_width_ratio_min", 0.28)
             ),
@@ -70,6 +87,7 @@ class KuangPlugin(Star):
             avatar_mode = True
 
         output_paths: list[str] = []
+        last_error_message = ""
         for image_target in image_targets:
             try:
                 input_path = await image_target.convert_to_file_path()
@@ -80,17 +98,18 @@ class KuangPlugin(Star):
                 event.track_temporary_local_file(output_path)
                 output_paths.append(output_path)
             except Exception as exc:
+                last_error_message = str(exc).strip()
                 logger.warning(
                     f"[{_PLUGIN_NAME}] 图片处理失败: {exc}",
                     exc_info=self.debug_mode,
                 )
 
         if not output_paths:
-            fallback_message = (
-                "❌ 头像获取或处理失败，请直接附图再试。"
-                if avatar_mode
-                else "❌ 图片处理失败，请确认消息里的图片可以被 AstrBot 下载。"
-            )
+            fallback_message = "❌ 图片处理失败。"
+            if last_error_message:
+                fallback_message = f"❌ 图片处理失败：{last_error_message}"
+            elif avatar_mode:
+                fallback_message = "❌ 头像获取或处理失败，请直接附图再试。"
             yield event.plain_result(fallback_message)
             return
 

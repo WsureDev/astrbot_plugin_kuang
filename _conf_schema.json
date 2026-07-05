@@ -1,9 +1,45 @@
 {
   "box_count": {
     "description": "每张图输出的线框数量",
-    "hint": "按需求默认固定为 5。识别出的目标不足时会自动补随机框。",
+    "hint": "按需求默认固定为 5。YOLO26n 识别出的目标不足时会自动补随机框。",
     "type": "int",
     "default": 5
+  },
+  "confidence_threshold": {
+    "description": "YOLO26n 识别置信度阈值",
+    "hint": "默认 0.25。调高会减少误检，调低会增加候选框数量。",
+    "type": "float",
+    "default": 0.25
+  },
+  "detector_iou_threshold": {
+    "description": "YOLO26n 去重 IoU 阈值",
+    "hint": "默认 0.45。值越小越容易去掉重叠框。",
+    "type": "float",
+    "default": 0.45
+  },
+  "model_input_size": {
+    "description": "YOLO26n 输入尺寸",
+    "hint": "默认 640。通常保持默认即可。",
+    "type": "int",
+    "default": 640
+  },
+  "model_path": {
+    "description": "YOLO26n 模型文件路径",
+    "hint": "留空时使用插件数据目录下的 models/yolo26n.onnx。若文件不存在且开启自动下载，将自动拉取官方模型。",
+    "type": "string",
+    "default": ""
+  },
+  "model_url": {
+    "description": "YOLO26n 模型下载地址",
+    "hint": "默认使用官方 Ultralytics 资源地址。仅在 auto_download_model 开启且本地缺少模型文件时使用。",
+    "type": "string",
+    "default": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.onnx"
+  },
+  "auto_download_model": {
+    "description": "自动下载 YOLO26n 模型",
+    "hint": "开启后，首次缺少模型文件时会自动下载到插件数据目录。",
+    "type": "bool",
+    "default": true
   },
   "line_width": {
     "description": "白色线框基础线宽",
@@ -49,7 +85,7 @@
   },
   "debug_mode": {
     "description": "输出调试日志",
-    "hint": "开启后会记录识别框数量、随机补框数量和头像回退逻辑。",
+    "hint": "开启后会记录 YOLO26n 识别结果、随机补框数量和头像回退逻辑。",
     "type": "bool",
     "default": false
   }

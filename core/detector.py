@@ -1,10 +1,112 @@
 from __future__ import annotations
 
-import os
 import random
+import shutil
+from pathlib import Path
 from typing import Any
+from urllib.request import urlopen
 
 from .models import DetectionBox
+
+_DEFAULT_MODEL_URL = (
+    "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.onnx"
+)
+
+_COCO_CLASS_NAMES = [
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "airplane",
+    "bus",
+    "train",
+    "truck",
+    "boat",
+    "traffic light",
+    "fire hydrant",
+    "stop sign",
+    "parking meter",
+    "bench",
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+    "backpack",
+    "umbrella",
+    "handbag",
+    "tie",
+    "suitcase",
+    "frisbee",
+    "skis",
+    "snowboard",
+    "sports ball",
+    "kite",
+    "baseball bat",
+    "baseball glove",
+    "skateboard",
+    "surfboard",
+    "tennis racket",
+    "bottle",
+    "wine glass",
+    "cup",
+    "fork",
+    "knife",
+    "spoon",
+    "bowl",
+    "banana",
+    "apple",
+    "sandwich",
+    "orange",
+    "broccoli",
+    "carrot",
+    "hot dog",
+    "pizza",
+    "donut",
+    "cake",
+    "chair",
+    "couch",
+    "potted plant",
+    "bed",
+    "dining table",
+    "toilet",
+    "tv",
+    "laptop",
+    "mouse",
+    "remote",
+    "keyboard",
+    "cell phone",
+    "microwave",
+    "oven",
+    "toaster",
+    "sink",
+    "refrigerator",
+    "book",
+    "clock",
+    "vase",
+    "scissors",
+    "teddy bear",
+    "hair drier",
+    "toothbrush",
+]
+
+_ANIMAL_CLASSES = {
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+}
 
 
 class EspBoxDetector:
@@ -12,298 +114,288 @@ class EspBoxDetector:
         self,
         *,
         box_count: int = 5,
+        model_path: str,
+        model_url: str = _DEFAULT_MODEL_URL,
+        auto_download_model: bool = True,
+        confidence_threshold: float = 0.25,
         random_width_ratio_min: float = 0.28,
         random_width_ratio_max: float = 0.52,
         random_height_ratio_min: float = 0.22,
         random_height_ratio_max: float = 0.55,
         nms_iou_threshold: float = 0.45,
+        model_input_size: int = 640,
     ) -> None:
         self.box_count = max(1, int(box_count))
+        self.model_path = Path(model_path)
+        resolved_model_url = str(model_url or "").strip()
+        self.model_url = resolved_model_url or _DEFAULT_MODEL_URL
+        self.auto_download_model = bool(auto_download_model)
+        self.confidence_threshold = max(0.0, float(confidence_threshold))
         self.random_width_ratio_min = float(random_width_ratio_min)
         self.random_width_ratio_max = float(random_width_ratio_max)
         self.random_height_ratio_min = float(random_height_ratio_min)
         self.random_height_ratio_max = float(random_height_ratio_max)
         self.nms_iou_threshold = float(nms_iou_threshold)
-        self._cv2: Any | None = None
+        self.model_input_size = max(64, int(model_input_size))
         self._np: Any | None = None
-        self._hog: Any | None = None
-        self._hog_unavailable = False
-        self._cascade_cache: dict[str, Any] = {}
+        self._ort: Any | None = None
+        self._session: Any | None = None
+        self._input_name: str | None = None
+        self._input_size: tuple[int, int] = (
+            self.model_input_size,
+            self.model_input_size,
+        )
 
     def load_image(self, image_path: str):
-        cv2, np = self._load_cv_stack()
-        file_buffer = np.fromfile(image_path, dtype=np.uint8)
-        image = cv2.imdecode(file_buffer, cv2.IMREAD_COLOR)
-        if image is None:
-            raise ValueError(f"OpenCV 无法读取图片: {image_path}")
-        return image
+        np = self._load_numpy()
+        try:
+            from PIL import Image
+        except ImportError as exc:
+            raise RuntimeError("缺少 Pillow 依赖，请先安装 requirements.txt。") from exc
+
+        with Image.open(image_path) as image:
+            return np.array(image.convert("RGB"))
 
     def detect_from_path(self, image_path: str) -> list[DetectionBox]:
         image = self.load_image(image_path)
         return self.detect(image)
 
-    def detect(self, image_bgr) -> list[DetectionBox]:
-        cv2, _ = self._load_cv_stack()
-        height, width = image_bgr.shape[:2]
-        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-
-        candidates: list[DetectionBox] = []
-        candidates.extend(self._detect_hog_people(image_bgr))
-        candidates.extend(
-            self._detect_cascade(
-                gray,
-                "haarcascade_fullbody.xml",
-                category="person_fullbody",
-                priority=0,
-                scale_factor=1.03,
-                min_neighbors=4,
-                min_size=(48, 96),
-                expand_mode="body",
-            )
-        )
-        candidates.extend(
-            self._detect_cascade(
-                gray,
-                "haarcascade_upperbody.xml",
-                category="person_upperbody",
-                priority=1,
-                scale_factor=1.03,
-                min_neighbors=4,
-                min_size=(40, 40),
-                expand_mode="upper",
-            )
-        )
-        candidates.extend(
-            self._detect_cascade(
-                gray,
-                "haarcascade_frontalface_default.xml",
-                category="head",
-                priority=2,
-                scale_factor=1.08,
-                min_neighbors=5,
-                min_size=(28, 28),
-                expand_mode="head",
-            )
-        )
-        candidates.extend(
-            self._detect_cascade(
-                gray,
-                "haarcascade_profileface.xml",
-                category="head_profile",
-                priority=2,
-                scale_factor=1.08,
-                min_neighbors=5,
-                min_size=(28, 28),
-                expand_mode="head",
-            )
-        )
-        candidates.extend(
-            self._detect_cascade(
-                gray,
-                "haarcascade_frontalcatface.xml",
-                category="animal_head",
-                priority=2,
-                scale_factor=1.08,
-                min_neighbors=4,
-                min_size=(24, 24),
-                expand_mode="head",
-            )
+    def detect(self, image_rgb) -> list[DetectionBox]:
+        image_height, image_width = image_rgb.shape[:2]
+        raw_output, scale, pad_x, pad_y = self._infer(image_rgb)
+        candidates = self._decode_predictions(
+            raw_output,
+            image_width=image_width,
+            image_height=image_height,
+            scale=scale,
+            pad_x=pad_x,
+            pad_y=pad_y,
         )
 
         recognized = self._select_recognized_boxes(candidates)
         if len(recognized) < self.box_count:
             recognized.extend(
                 self._generate_random_boxes(
-                    width,
-                    height,
+                    image_width,
+                    image_height,
                     self.box_count - len(recognized),
                     recognized,
                 )
             )
         return recognized[: self.box_count]
 
-    def _load_cv_stack(self):
-        if self._cv2 is None or self._np is None:
+    def _load_numpy(self):
+        if self._np is None:
             try:
-                import cv2
                 import numpy as np
             except ImportError as exc:
-                raise RuntimeError(
-                    "缺少 OpenCV / NumPy 依赖，请先安装 requirements.txt。"
-                ) from exc
-            self._cv2 = cv2
+                raise RuntimeError("缺少 NumPy 依赖，请先安装 requirements.txt。") from exc
             self._np = np
-        return self._cv2, self._np
+        return self._np
 
-    def _get_hog(self):
-        cv2, _ = self._load_cv_stack()
-        if self._hog is None and not self._hog_unavailable:
-            hog_ctor = getattr(cv2, "HOGDescriptor", None)
-            detector_factory = getattr(
-                cv2,
-                "HOGDescriptor_getDefaultPeopleDetector",
-                None,
-            )
-            if not callable(hog_ctor) or not callable(detector_factory):
-                self._hog_unavailable = True
-                return None
+    def _load_onnxruntime(self):
+        if self._ort is None:
             try:
-                hog = hog_ctor()
-                hog.setSVMDetector(detector_factory())
-            except Exception:
-                self._hog_unavailable = True
-                return None
-            self._hog = hog
-        return self._hog
+                import onnxruntime as ort
+            except ImportError as exc:
+                raise RuntimeError(
+                    "缺少 onnxruntime 依赖，请先安装 requirements.txt。"
+                ) from exc
+            self._ort = ort
+        return self._ort
 
-    def _get_cascade(self, file_name: str):
-        cv2, _ = self._load_cv_stack()
-        if file_name in self._cascade_cache:
-            return self._cascade_cache[file_name]
+    def _ensure_model_file(self) -> Path:
+        if self.model_path.exists():
+            return self.model_path
 
-        cascade_path = os.path.join(cv2.data.haarcascades, file_name)
-        cascade = cv2.CascadeClassifier(cascade_path)
-        if cascade.empty():
-            raise RuntimeError(f"无法加载 Haar Cascade 模型: {file_name}")
-        self._cascade_cache[file_name] = cascade
-        return cascade
-
-    def _detect_hog_people(self, image_bgr) -> list[DetectionBox]:
-        hog = self._get_hog()
-        if hog is None:
-            return []
-        try:
-            rects, weights = hog.detectMultiScale(
-                image_bgr,
-                winStride=(4, 4),
-                padding=(8, 8),
-                scale=1.05,
+        if not self.auto_download_model:
+            raise RuntimeError(
+                f"未找到 YOLO26n 模型文件: {self.model_path}. "
+                "请在配置中指定 model_path，或开启 auto_download_model。"
             )
-        except Exception:
-            self._hog = None
-            self._hog_unavailable = True
-            return []
+        if not self.model_url:
+            raise RuntimeError("未配置 YOLO26n 模型下载地址 model_url。")
 
-        detections: list[DetectionBox] = []
-        for (x, y, w, h), weight in zip(rects, weights):
-            detections.append(
-                self._normalize_box(
-                    x,
-                    y,
-                    w,
-                    h,
-                    image_bgr.shape[1],
-                    image_bgr.shape[0],
-                    score=float(weight),
-                    category="person_fullbody",
-                    priority=0,
-                    source="hog",
-                    expand_mode="body",
-                )
-            )
-        return detections
-
-    def _detect_cascade(
-        self,
-        gray_image,
-        cascade_name: str,
-        *,
-        category: str,
-        priority: int,
-        scale_factor: float,
-        min_neighbors: int,
-        min_size: tuple[int, int],
-        expand_mode: str,
-    ) -> list[DetectionBox]:
+        self.model_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = self.model_path.with_suffix(f"{self.model_path.suffix}.download")
         try:
-            cascade = self._get_cascade(cascade_name)
-        except RuntimeError:
-            return []
-        rects = cascade.detectMultiScale(
-            gray_image,
-            scaleFactor=scale_factor,
-            minNeighbors=min_neighbors,
-            minSize=min_size,
+            with urlopen(self.model_url, timeout=60) as response, temp_path.open(
+                "wb"
+            ) as file_obj:
+                shutil.copyfileobj(response, file_obj)
+            temp_path.replace(self.model_path)
+        except Exception as exc:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise RuntimeError(
+                f"YOLO26n 模型下载失败，请检查网络或手动放置模型文件: {exc}"
+            ) from exc
+
+        return self.model_path
+
+    def _get_session(self):
+        if self._session is not None:
+            return self._session
+
+        ort = self._load_onnxruntime()
+        model_path = self._ensure_model_file()
+        try:
+            session = ort.InferenceSession(
+                str(model_path),
+                providers=["CPUExecutionProvider"],
+            )
+        except Exception as exc:
+            raise RuntimeError(f"YOLO26n ONNX 模型加载失败: {exc}") from exc
+
+        input_meta = session.get_inputs()
+        if not input_meta:
+            raise RuntimeError("YOLO26n ONNX 模型未暴露输入张量。")
+
+        self._session = session
+        self._input_name = input_meta[0].name
+        self._input_size = self._resolve_input_size(input_meta[0].shape)
+        return self._session
+
+    def _resolve_input_size(self, shape: list[Any] | tuple[Any, ...]) -> tuple[int, int]:
+        height = self.model_input_size
+        width = self.model_input_size
+        if len(shape) >= 4:
+            if isinstance(shape[2], int) and shape[2] > 0:
+                height = int(shape[2])
+            if isinstance(shape[3], int) and shape[3] > 0:
+                width = int(shape[3])
+        return width, height
+
+    def _infer(self, image_rgb):
+        np = self._load_numpy()
+        session = self._get_session()
+        tensor, scale, pad_x, pad_y = self._prepare_input(image_rgb)
+        outputs = session.run(None, {self._input_name: tensor})
+        if not outputs:
+            raise RuntimeError("YOLO26n ONNX 推理未返回任何输出。")
+        return np.asarray(outputs[0]), scale, pad_x, pad_y
+
+    def _prepare_input(self, image_rgb):
+        np = self._load_numpy()
+        try:
+            from PIL import Image
+        except ImportError as exc:
+            raise RuntimeError("缺少 Pillow 依赖，请先安装 requirements.txt。") from exc
+
+        image_height, image_width = image_rgb.shape[:2]
+        input_width, input_height = self._input_size
+        scale = min(input_width / image_width, input_height / image_height)
+        resized_width = max(1, int(round(image_width * scale)))
+        resized_height = max(1, int(round(image_height * scale)))
+        pad_x = (input_width - resized_width) // 2
+        pad_y = (input_height - resized_height) // 2
+
+        resized = Image.fromarray(image_rgb).resize(
+            (resized_width, resized_height),
+            Image.BILINEAR,
         )
-        image_height, image_width = gray_image.shape[:2]
-        detections: list[DetectionBox] = []
-        for x, y, w, h in rects:
-            detections.append(
-                self._normalize_box(
-                    x,
-                    y,
-                    w,
-                    h,
-                    image_width,
-                    image_height,
-                    score=1.0,
-                    category=category,
-                    priority=priority,
-                    source=cascade_name,
-                    expand_mode=expand_mode,
-                )
-            )
-        return detections
+        canvas = np.full((input_height, input_width, 3), 114, dtype=np.uint8)
+        canvas[
+            pad_y : pad_y + resized_height,
+            pad_x : pad_x + resized_width,
+        ] = np.asarray(resized)
 
-    def _normalize_box(
+        tensor = canvas.astype(np.float32) / 255.0
+        tensor = np.transpose(tensor, (2, 0, 1))[None, ...]
+        return tensor, scale, float(pad_x), float(pad_y)
+
+    def _decode_predictions(
         self,
-        x: int,
-        y: int,
-        w: int,
-        h: int,
+        raw_output,
+        *,
         image_width: int,
         image_height: int,
-        *,
-        score: float,
-        category: str,
-        priority: int,
-        source: str,
-        expand_mode: str,
-    ) -> DetectionBox:
-        x1 = float(x)
-        y1 = float(y)
-        x2 = float(x + w)
-        y2 = float(y + h)
+        scale: float,
+        pad_x: float,
+        pad_y: float,
+    ) -> list[DetectionBox]:
+        np = self._load_numpy()
+        predictions = np.asarray(raw_output)
 
-        if expand_mode == "body":
-            padding_x = w * 0.08
-            padding_y = h * 0.05
-            x1 -= padding_x
-            x2 += padding_x
-            y1 -= padding_y
-            y2 += padding_y
-        elif expand_mode == "upper":
-            padding_x = w * 0.12
-            top_padding = h * 0.10
-            bottom_padding = h * 0.45
-            x1 -= padding_x
-            x2 += padding_x
-            y1 -= top_padding
-            y2 += bottom_padding
-        elif expand_mode == "head":
-            center_x = x + (w / 2.0)
-            new_w = w * 1.45
-            new_h = h * 1.90
-            x1 = center_x - (new_w / 2.0)
-            x2 = center_x + (new_w / 2.0)
-            y1 = y - (h * 0.28)
-            y2 = y1 + new_h
+        if predictions.ndim == 3 and predictions.shape[0] == 1:
+            predictions = predictions[0]
+        if predictions.ndim != 2:
+            raise RuntimeError(
+                f"YOLO26n 输出形状不受支持: {tuple(predictions.shape)}"
+            )
+        if predictions.shape[0] < predictions.shape[1]:
+            predictions = predictions.T
 
-        x1 = max(0, int(round(x1)))
-        y1 = max(0, int(round(y1)))
-        x2 = min(image_width, int(round(x2)))
-        y2 = min(image_height, int(round(y2)))
+        detections: list[DetectionBox] = []
+        for row in predictions:
+            row = np.asarray(row).astype(np.float32).reshape(-1)
+            if row.size < 6:
+                continue
 
-        return DetectionBox(
-            x1=x1,
-            y1=y1,
-            x2=max(x1 + 1, x2),
-            y2=max(y1 + 1, y2),
-            score=score,
-            category=category,
-            priority=priority,
-            source=source,
-        )
+            if row.size == 7 and abs(row[0]) < 1e-6:
+                row = row[1:]
+
+            if row.size == 6:
+                x1, y1, x2, y2, score, class_id = row.tolist()
+                class_id = int(class_id)
+            else:
+                class_scores = row[4:]
+                class_id = int(np.argmax(class_scores))
+                score = float(class_scores[class_id])
+                if class_id < 0 or class_id >= len(class_scores):
+                    continue
+                center_x, center_y, box_width, box_height = row[:4].tolist()
+                x1 = center_x - (box_width / 2.0)
+                y1 = center_y - (box_height / 2.0)
+                x2 = center_x + (box_width / 2.0)
+                y2 = center_y + (box_height / 2.0)
+
+            if score < self.confidence_threshold:
+                continue
+
+            x1 = (x1 - pad_x) / scale
+            y1 = (y1 - pad_y) / scale
+            x2 = (x2 - pad_x) / scale
+            y2 = (y2 - pad_y) / scale
+
+            x1 = max(0, min(image_width, int(round(x1))))
+            y1 = max(0, min(image_height, int(round(y1))))
+            x2 = max(0, min(image_width, int(round(x2))))
+            y2 = max(0, min(image_height, int(round(y2))))
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            label = self._label_for_class_id(class_id)
+            detections.append(
+                DetectionBox(
+                    x1=x1,
+                    y1=y1,
+                    x2=x2,
+                    y2=y2,
+                    score=float(score),
+                    category=label,
+                    priority=self._priority_for_label(label),
+                    source="yolo26n",
+                )
+            )
+
+        return detections
+
+    @staticmethod
+    def _label_for_class_id(class_id: int) -> str:
+        if 0 <= class_id < len(_COCO_CLASS_NAMES):
+            return _COCO_CLASS_NAMES[class_id]
+        return f"class_{class_id}"
+
+    @staticmethod
+    def _priority_for_label(label: str) -> int:
+        if label == "person":
+            return 0
+        if label in _ANIMAL_CLASSES:
+            return 1
+        return 5
 
     def _select_recognized_boxes(
         self, candidates: list[DetectionBox]
