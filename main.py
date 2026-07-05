@@ -54,7 +54,7 @@ class KuangPlugin(Star):
                 self.config.get("random_width_ratio_max", 0.52)
             ),
             random_height_ratio_min=float(
-                self.config.get("random_height_ratio_min", 0.22)
+                self.config.get("random_height_ratio_min", 0.09)
             ),
             random_height_ratio_max=float(
                 self.config.get("random_height_ratio_max", 0.55)

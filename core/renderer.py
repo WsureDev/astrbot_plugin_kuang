@@ -34,32 +34,12 @@ class EspBoxRenderer:
             int(round(min(base.size) * 0.0022)),
         )
         outline = (255, 255, 255, self.line_alpha)
-        shadow = (255, 255, 255, max(60, self.line_alpha // 4))
 
         for box in boxes:
             x1, y1, x2, y2 = box.as_tuple()
             draw.rectangle((x1, y1, x2, y2), outline=outline, width=dynamic_width)
-            glow_width = max(1, dynamic_width + 1)
-            draw.rectangle((x1 - 1, y1 - 1, x2 + 1, y2 + 1), outline=shadow, width=glow_width)
-            self._draw_corner_accents(draw, box, outline, dynamic_width + 1)
 
         composed = Image.alpha_composite(base, overlay).convert("RGB")
         output_path = os.path.join(output_dir, f"kuang_{uuid.uuid4().hex}.png")
         composed.save(output_path, format="PNG")
         return output_path
-
-    def _draw_corner_accents(self, draw, box: DetectionBox, color, width: int) -> None:
-        x1, y1, x2, y2 = box.as_tuple()
-        corner_len = max(10, min(box.width, box.height) // 4)
-
-        draw.line((x1, y1, x1 + corner_len, y1), fill=color, width=width)
-        draw.line((x1, y1, x1, y1 + corner_len), fill=color, width=width)
-
-        draw.line((x2 - corner_len, y1, x2, y1), fill=color, width=width)
-        draw.line((x2, y1, x2, y1 + corner_len), fill=color, width=width)
-
-        draw.line((x1, y2 - corner_len, x1, y2), fill=color, width=width)
-        draw.line((x1, y2, x1 + corner_len, y2), fill=color, width=width)
-
-        draw.line((x2, y2 - corner_len, x2, y2), fill=color, width=width)
-        draw.line((x2 - corner_len, y2, x2, y2), fill=color, width=width)

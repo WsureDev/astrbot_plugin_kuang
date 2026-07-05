@@ -428,6 +428,11 @@ class EspBoxDetector:
     ) -> list[DetectionBox]:
         rng = random.Random((image_width << 16) ^ image_height ^ missing_count)
         generated: list[DetectionBox] = []
+        max_height_ratio = max(self.random_height_ratio_max, 0.01)
+        min_height_ratio = min(
+            self.random_height_ratio_min,
+            max_height_ratio / 6.0,
+        )
 
         max_attempts = max(40, missing_count * 40)
         for _ in range(max_attempts):
@@ -435,8 +440,8 @@ class EspBoxDetector:
                 break
 
             height_ratio = rng.uniform(
-                self.random_height_ratio_min,
-                self.random_height_ratio_max,
+                max(0.01, min_height_ratio),
+                max_height_ratio,
             )
             box_height = max(24, int(image_height * height_ratio))
             box_width = max(

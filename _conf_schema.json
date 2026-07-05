@@ -67,9 +67,9 @@
   },
   "random_height_ratio_min": {
     "description": "随机框最小高度占图比例",
-    "hint": "默认随机框高度不会过矮，保持外挂透视框观感。",
+    "hint": "默认允许小框下探到大框约 1/6 的量级，用来模拟 FPS 视角里的远近差异。",
     "type": "float",
-    "default": 0.22
+    "default": 0.09
   },
   "random_height_ratio_max": {
     "description": "随机框最大高度占图比例",
