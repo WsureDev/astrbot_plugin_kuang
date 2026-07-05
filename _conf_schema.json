@@ -1,0 +1,56 @@
+{
+  "box_count": {
+    "description": "每张图输出的线框数量",
+    "hint": "按需求默认固定为 5。识别出的目标不足时会自动补随机框。",
+    "type": "int",
+    "default": 5
+  },
+  "line_width": {
+    "description": "白色线框基础线宽",
+    "hint": "数值越大线条越粗。实际绘制时会结合图片尺寸做最小值修正。",
+    "type": "int",
+    "default": 3
+  },
+  "line_alpha": {
+    "description": "白色线框透明度",
+    "hint": "取值建议 0-255，默认 220。",
+    "type": "int",
+    "default": 220
+  },
+  "random_width_ratio_min": {
+    "description": "随机框最小宽高比",
+    "hint": "按 FPS 透视框风格使用偏细长矩形。这里是宽/高的最小值。",
+    "type": "float",
+    "default": 0.28
+  },
+  "random_width_ratio_max": {
+    "description": "随机框最大宽高比",
+    "hint": "按 FPS 透视框风格使用偏细长矩形。这里是宽/高的最大值。",
+    "type": "float",
+    "default": 0.52
+  },
+  "random_height_ratio_min": {
+    "description": "随机框最小高度占图比例",
+    "hint": "默认随机框高度不会过矮，保持外挂透视框观感。",
+    "type": "float",
+    "default": 0.22
+  },
+  "random_height_ratio_max": {
+    "description": "随机框最大高度占图比例",
+    "hint": "默认随机框高度不会过大，避免盖住整张图。",
+    "type": "float",
+    "default": 0.55
+  },
+  "avatar_url_template": {
+    "description": "头像 URL 模板",
+    "hint": "留空时，若发送者 ID 为纯数字，则默认使用 QQ 头像地址。可使用 {user_id}、{platform_name}、{platform_id} 变量。",
+    "type": "string",
+    "default": ""
+  },
+  "debug_mode": {
+    "description": "输出调试日志",
+    "hint": "开启后会记录识别框数量、随机补框数量和头像回退逻辑。",
+    "type": "bool",
+    "default": false
+  }
+}
