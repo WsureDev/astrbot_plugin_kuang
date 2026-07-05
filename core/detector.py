@@ -472,7 +472,7 @@ class EspBoxDetector:
             )
 
             all_boxes = existing_boxes + generated
-            if any(self._iou(candidate, other) >= 0.35 for other in all_boxes):
+            if any(self._overlaps(candidate, other) for other in all_boxes):
                 continue
 
             generated.append(candidate)
@@ -522,7 +522,7 @@ class EspBoxDetector:
                     source="grid_fallback",
                 )
 
-                if any(self._iou(candidate, other) >= 0.35 for other in existing_boxes):
+                if any(self._overlaps(candidate, other) for other in existing_boxes):
                     continue
                 fallback.append(candidate)
 
@@ -550,6 +550,13 @@ class EspBoxDetector:
                         continue
                     fallback.append(candidate)
         return fallback
+
+    @staticmethod
+    def _overlaps(left: DetectionBox, right: DetectionBox) -> bool:
+        return (
+            max(left.x1, right.x1) < min(left.x2, right.x2)
+            and max(left.y1, right.y1) < min(left.y2, right.y2)
+        )
 
     @staticmethod
     def _iou(left: DetectionBox, right: DetectionBox) -> float:
