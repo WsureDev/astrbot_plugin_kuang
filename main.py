@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from astrbot.api import logger
-from astrbot.api.all import Image, Reply
+from astrbot.api.all import At, Image, Reply
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 
@@ -17,7 +17,7 @@ _DEFAULT_QQ_AVATAR = "https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
     "kuang",
     "WsureDev",
     "为图片叠加 FPS 外挂透视风格白色线框",
-    "0.5.0",
+    "0.6.0",
     "https://github.com/WsureDev/astrbot_plugin_kuang",
 )
 class KuangPlugin(Star):
@@ -65,7 +65,7 @@ class KuangPlugin(Star):
             line_alpha=int(self.config.get("line_alpha", 220)),
         )
 
-    @filter.regex(r"^\s*框\s*$")
+    @filter.regex(r"^(?:\s|\[At:[^\]]+\])*\s*框\s*(?:\s|\[At:[^\]]+\])*$")
     async def kuang(self, event: AstrMessageEvent):
         async for result in self._do_kuang(event):
             yield result
@@ -159,26 +159,39 @@ class KuangPlugin(Star):
         return images
 
     def _build_avatar_target(self, event: AstrMessageEvent) -> Image | None:
+        target_user_id = self._extract_at_target_id(event)
         sender_id = str(event.get_sender_id() or "").strip()
+        avatar_user_id = target_user_id or sender_id
         sender = getattr(event.message_obj, "sender", None)
-        for attr_name in ("avatar", "avatar_url", "face_url", "face"):
-            avatar_value = str(getattr(sender, attr_name, "") or "").strip()
-            if avatar_value.startswith("http://") or avatar_value.startswith("https://"):
-                return Image.fromURL(avatar_value)
+        if not target_user_id:
+            for attr_name in ("avatar", "avatar_url", "face_url", "face"):
+                avatar_value = str(getattr(sender, attr_name, "") or "").strip()
+                if avatar_value.startswith("http://") or avatar_value.startswith("https://"):
+                    return Image.fromURL(avatar_value)
 
-        if not sender_id:
+        if not avatar_user_id:
             return None
 
         template = str(self.config.get("avatar_url_template", "")).strip()
         if template:
             avatar_url = template.format(
-                user_id=sender_id,
+                user_id=avatar_user_id,
                 platform_name=event.get_platform_name(),
                 platform_id=event.get_platform_id(),
             )
             return Image.fromURL(avatar_url)
 
-        if sender_id.isdigit():
-            return Image.fromURL(_DEFAULT_QQ_AVATAR.format(user_id=sender_id))
+        if avatar_user_id.isdigit():
+            return Image.fromURL(_DEFAULT_QQ_AVATAR.format(user_id=avatar_user_id))
 
         return None
+
+    def _extract_at_target_id(self, event: AstrMessageEvent) -> str:
+        for component in event.get_messages():
+            if not isinstance(component, At):
+                continue
+            target_id = str(getattr(component, "qq", "") or "").strip()
+            if not target_id or target_id.lower() == "all":
+                continue
+            return target_id
+        return ""
