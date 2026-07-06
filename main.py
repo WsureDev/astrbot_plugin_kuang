@@ -17,7 +17,7 @@ _DEFAULT_QQ_AVATAR = "https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
     "kuang",
     "WsureDev",
     "为图片叠加 FPS 外挂透视风格白色线框",
-    "0.3.0",
+    "0.4.0",
     "https://github.com/WsureDev/astrbot_plugin_kuang",
 )
 class KuangPlugin(Star):

@@ -120,7 +120,7 @@ class EspBoxDetector:
         confidence_threshold: float = 0.25,
         random_width_ratio_min: float = 0.28,
         random_width_ratio_max: float = 0.52,
-        random_height_ratio_min: float = 0.22,
+        random_height_ratio_min: float = 0.09,
         random_height_ratio_max: float = 0.55,
         nms_iou_threshold: float = 0.45,
         model_input_size: int = 640,
@@ -183,6 +183,27 @@ class EspBoxDetector:
                 )
             )
         return recognized[: self.box_count]
+
+    def generate_random_layout_preview(
+        self,
+        image_width: int,
+        image_height: int,
+        *,
+        box_count: int | None = None,
+        seed: int | None = None,
+    ) -> tuple[list[DetectionBox], dict[str, Any]]:
+        target_count = self.box_count if box_count is None else max(1, int(box_count))
+        rng = self._build_random_rng(image_width, image_height, target_count, seed)
+        scene = self._build_perspective_scene(image_width, image_height, rng)
+        boxes = self._generate_random_boxes(
+            image_width,
+            image_height,
+            target_count,
+            [],
+            rng=rng,
+            scene=scene,
+        )
+        return boxes[:target_count], scene
 
     def _load_numpy(self):
         if self._np is None:
@@ -384,6 +405,180 @@ class EspBoxDetector:
         return detections
 
     @staticmethod
+    def _build_random_rng(
+        image_width: int,
+        image_height: int,
+        box_count: int,
+        seed: int | None = None,
+    ) -> random.Random:
+        if seed is None:
+            seed = (image_width << 16) ^ image_height ^ box_count
+        return random.Random(seed)
+
+    def _build_perspective_scene(
+        self,
+        image_width: int,
+        image_height: int,
+        rng: random.Random,
+    ) -> dict[str, Any]:
+        horizon_y = max(24, int(round(image_height * 0.20)))
+        ground_bottom_y = image_height - 1
+        vanishing_x = image_width / 2.0
+        platforms: list[dict[str, Any]] = []
+
+        platform_count = 2 + rng.randint(0, 2)
+        attempts = 0
+        while len(platforms) < platform_count and attempts < 24:
+            attempts += 1
+            depth = rng.uniform(0.25, 0.74)
+            ground_y = self._project_ground_y(horizon_y, ground_bottom_y, depth)
+            person_height = self._project_person_height(image_height, depth)
+            crate_height = max(12, int(person_height * rng.uniform(0.28, 0.62)))
+            top_y = max(horizon_y + 8, ground_y - crate_height)
+            lateral_extent = self._lateral_extent(depth)
+            center_x = int(
+                round(
+                    image_width
+                    * (0.5 + rng.uniform(-0.95, 0.95) * lateral_extent * 0.95)
+                )
+            )
+            half_width = max(
+                18,
+                int(image_width * (0.06 + depth * 0.08) * rng.uniform(0.9, 1.25)),
+            )
+            x1 = max(0, center_x - half_width)
+            x2 = min(image_width, center_x + half_width)
+            if x2 - x1 < 30:
+                continue
+            if any(
+                abs(platform["top_y"] - top_y) < 10
+                and max(platform["x1"], x1) < min(platform["x2"], x2)
+                for platform in platforms
+            ):
+                continue
+
+            platforms.append(
+                {
+                    "x1": x1,
+                    "x2": x2,
+                    "top_y": top_y,
+                    "ground_y": ground_y,
+                    "depth": depth,
+                }
+            )
+
+        platforms.sort(key=lambda item: (item["ground_y"], item["x1"]))
+        return {
+            "horizon_y": horizon_y,
+            "ground_bottom_y": ground_bottom_y,
+            "vanishing_x": vanishing_x,
+            "platforms": platforms,
+        }
+
+    @staticmethod
+    def _project_ground_y(horizon_y: int, ground_bottom_y: int, depth: float) -> int:
+        depth = max(0.0, min(1.0, depth))
+        return int(
+            round(
+                horizon_y + ((ground_bottom_y - horizon_y) * (depth**0.92))
+            )
+        )
+
+    @staticmethod
+    def _lateral_extent(depth: float) -> float:
+        depth = max(0.0, min(1.0, depth))
+        return 0.14 + (depth * 0.38)
+
+    def _project_person_height(self, image_height: int, depth: float) -> float:
+        max_height = image_height * self.random_height_ratio_max
+        min_ratio = max(
+            0.01,
+            min(self.random_height_ratio_min, self.random_height_ratio_max / 6.0),
+        )
+        min_height = image_height * min_ratio
+        depth = max(0.0, min(1.0, depth))
+        return min_height + ((max_height - min_height) * (depth**1.55))
+
+    def _make_random_candidate(
+        self,
+        image_width: int,
+        image_height: int,
+        rng: random.Random,
+        scene: dict[str, Any],
+    ) -> DetectionBox | None:
+        platforms = scene["platforms"]
+        use_platform = bool(platforms) and rng.random() < 0.28
+
+        if use_platform:
+            platform = rng.choice(platforms)
+            depth = float(platform["depth"])
+            foot_y = int(platform["top_y"])
+            box_height = int(round(self._project_person_height(image_height, depth) * rng.uniform(0.92, 1.12)))
+            box_width = int(
+                round(
+                    box_height
+                    * rng.uniform(
+                        self.random_width_ratio_min,
+                        self.random_width_ratio_max,
+                    )
+                )
+            )
+            min_center = platform["x1"] + (box_width // 2)
+            max_center = platform["x2"] - (box_width // 2)
+            if min_center >= max_center:
+                return None
+            center_x = rng.randint(min_center, max_center)
+            source = "random_platform"
+        else:
+            depth = max(0.08, min(1.0, rng.random() ** 1.35))
+            foot_y = self._project_ground_y(
+                scene["horizon_y"],
+                scene["ground_bottom_y"],
+                depth,
+            )
+            box_height = int(round(self._project_person_height(image_height, depth) * rng.uniform(0.9, 1.14)))
+            box_width = int(
+                round(
+                    box_height
+                    * rng.uniform(
+                        self.random_width_ratio_min,
+                        self.random_width_ratio_max,
+                    )
+                )
+            )
+            lateral_extent = self._lateral_extent(depth)
+            center_x = int(
+                round(
+                    image_width
+                    * (0.5 + rng.uniform(-1.0, 1.0) * lateral_extent)
+                )
+            )
+            source = "random_ground"
+
+        box_height = max(24, box_height)
+        box_width = max(16, box_width)
+        x1 = center_x - (box_width // 2)
+        y1 = foot_y - box_height
+        x2 = x1 + box_width
+        y2 = foot_y
+
+        if x1 < 0 or x2 > image_width:
+            return None
+        if y1 < 0 or y2 > image_height or y2 <= y1:
+            return None
+
+        return DetectionBox(
+            x1=x1,
+            y1=y1,
+            x2=x2,
+            y2=y2,
+            score=0.0,
+            category="random",
+            priority=99,
+            source=source,
+        )
+
+    @staticmethod
     def _label_for_class_id(class_id: int) -> str:
         if 0 <= class_id < len(_COCO_CLASS_NAMES):
             return _COCO_CLASS_NAMES[class_id]
@@ -425,51 +620,33 @@ class EspBoxDetector:
         image_height: int,
         missing_count: int,
         existing_boxes: list[DetectionBox],
+        *,
+        rng: random.Random | None = None,
+        scene: dict[str, Any] | None = None,
     ) -> list[DetectionBox]:
-        rng = random.Random((image_width << 16) ^ image_height ^ missing_count)
-        generated: list[DetectionBox] = []
-        max_height_ratio = max(self.random_height_ratio_max, 0.01)
-        min_height_ratio = min(
-            self.random_height_ratio_min,
-            max_height_ratio / 6.0,
-        )
+        if rng is None:
+            rng = self._build_random_rng(
+                image_width,
+                image_height,
+                missing_count,
+            )
+        if scene is None:
+            scene = self._build_perspective_scene(image_width, image_height, rng)
 
-        max_attempts = max(40, missing_count * 40)
+        generated: list[DetectionBox] = []
+        max_attempts = max(80, missing_count * 80)
         for _ in range(max_attempts):
             if len(generated) >= missing_count:
                 break
 
-            height_ratio = rng.uniform(
-                max(0.01, min_height_ratio),
-                max_height_ratio,
+            candidate = self._make_random_candidate(
+                image_width,
+                image_height,
+                rng,
+                scene,
             )
-            box_height = max(24, int(image_height * height_ratio))
-            box_width = max(
-                16,
-                int(
-                    box_height
-                    * rng.uniform(
-                        self.random_width_ratio_min,
-                        self.random_width_ratio_max,
-                    )
-                ),
-            )
-
-            if box_width >= image_width or box_height >= image_height:
+            if candidate is None:
                 continue
-
-            x1 = rng.randint(0, max(0, image_width - box_width))
-            y1 = rng.randint(0, max(0, image_height - box_height))
-            candidate = DetectionBox(
-                x1=x1,
-                y1=y1,
-                x2=x1 + box_width,
-                y2=y1 + box_height,
-                score=0.0,
-                category="random",
-                priority=99,
-                source="random",
-            )
 
             all_boxes = existing_boxes + generated
             if any(self._overlaps(candidate, other) for other in all_boxes):
@@ -479,76 +656,111 @@ class EspBoxDetector:
 
         if len(generated) < missing_count:
             generated.extend(
-                self._generate_grid_fallback_boxes(
+                self._generate_perspective_fallback_boxes(
                     image_width,
                     image_height,
                     missing_count - len(generated),
                     existing_boxes + generated,
+                    rng,
+                    scene,
                 )
             )
         return generated
 
-    def _generate_grid_fallback_boxes(
+    def _generate_perspective_fallback_boxes(
         self,
         image_width: int,
         image_height: int,
         missing_count: int,
         existing_boxes: list[DetectionBox],
+        rng: random.Random,
+        scene: dict[str, Any],
     ) -> list[DetectionBox]:
         fallback: list[DetectionBox] = []
-        columns = 3
-        rows = 2
-        cell_width = max(1, image_width // columns)
-        cell_height = max(1, image_height // rows)
+        slots: list[tuple[str, Any, Any]] = []
 
-        for row in range(rows):
-            for column in range(columns):
-                if len(fallback) >= missing_count:
-                    return fallback
+        for platform in scene["platforms"]:
+            slots.append(("platform", platform, 0.0))
+            slots.append(("platform", platform, -0.25))
+            slots.append(("platform", platform, 0.25))
 
-                box_height = max(24, int(cell_height * 0.72))
-                box_width = max(16, int(box_height * 0.38))
-                center_x = int((column + 0.5) * cell_width)
-                x1 = max(0, center_x - (box_width // 2))
-                y1 = max(0, row * cell_height + int(cell_height * 0.15))
-                candidate = DetectionBox(
-                    x1=x1,
-                    y1=y1,
-                    x2=min(image_width, x1 + box_width),
-                    y2=min(image_height, y1 + box_height),
-                    score=0.0,
-                    category="random",
-                    priority=99,
-                    source="grid_fallback",
-                )
+        depth_slots = [0.18, 0.28, 0.38, 0.50, 0.62, 0.74, 0.88]
+        lane_slots = [-0.82, -0.55, -0.28, 0.0, 0.28, 0.55, 0.82]
+        for depth in depth_slots:
+            for lane in lane_slots:
+                slots.append(("ground", depth, lane))
 
-                if any(self._overlaps(candidate, other) for other in existing_boxes):
-                    continue
-                fallback.append(candidate)
+        rng.shuffle(slots)
+        for slot_kind, slot_a, slot_b in slots:
+            if len(fallback) >= missing_count:
+                return fallback
 
-        if len(fallback) < missing_count:
-            for row in range(rows):
-                for column in range(columns):
-                    if len(fallback) >= missing_count:
-                        return fallback
-                    box_height = max(24, int(cell_height * 0.72))
-                    box_width = max(16, int(box_height * 0.38))
-                    center_x = int((column + 0.5) * cell_width)
-                    x1 = max(0, center_x - (box_width // 2))
-                    y1 = max(0, row * cell_height + int(cell_height * 0.15))
-                    candidate = DetectionBox(
-                        x1=x1,
-                        y1=y1,
-                        x2=min(image_width, x1 + box_width),
-                        y2=min(image_height, y1 + box_height),
-                        score=0.0,
-                        category="random",
-                        priority=99,
-                        source="grid_forced",
+            if slot_kind == "platform":
+                platform = slot_a
+                depth = float(platform["depth"])
+                box_height = int(round(self._project_person_height(image_height, depth)))
+                box_width = int(
+                    round(
+                        box_height
+                        * ((self.random_width_ratio_min + self.random_width_ratio_max) / 2.0)
                     )
-                    if any(candidate.as_tuple() == item.as_tuple() for item in fallback):
-                        continue
-                    fallback.append(candidate)
+                )
+                center_x = int(
+                    round(
+                        ((platform["x1"] + platform["x2"]) / 2.0)
+                        + (((platform["x2"] - platform["x1"]) * 0.28) * float(slot_b))
+                    )
+                )
+                foot_y = int(platform["top_y"])
+                source = "random_platform_fallback"
+            else:
+                depth = float(slot_a) + rng.uniform(-0.035, 0.035)
+                depth = max(0.12, min(0.94, depth))
+                foot_y = self._project_ground_y(
+                    scene["horizon_y"],
+                    scene["ground_bottom_y"],
+                    depth,
+                )
+                box_height = int(round(self._project_person_height(image_height, depth)))
+                box_width = int(
+                    round(
+                        box_height
+                        * ((self.random_width_ratio_min + self.random_width_ratio_max) / 2.0)
+                    )
+                )
+                center_x = int(
+                    round(
+                        image_width
+                        * (
+                            0.5
+                            + (float(slot_b) * self._lateral_extent(depth))
+                            + rng.uniform(-0.035, 0.035)
+                        )
+                    )
+                )
+                source = "random_ground_fallback"
+
+            x1 = center_x - (box_width // 2)
+            y1 = foot_y - box_height
+            x2 = x1 + box_width
+            y2 = foot_y
+            if x1 < 0 or x2 > image_width or y1 < 0 or y2 > image_height:
+                continue
+
+            candidate = DetectionBox(
+                x1=x1,
+                y1=y1,
+                x2=x2,
+                y2=y2,
+                score=0.0,
+                category="random",
+                priority=99,
+                source=source,
+            )
+            all_boxes = existing_boxes + fallback
+            if any(self._overlaps(candidate, other) for other in all_boxes):
+                continue
+            fallback.append(candidate)
         return fallback
 
     @staticmethod

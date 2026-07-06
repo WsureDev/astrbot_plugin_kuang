@@ -28,3 +28,11 @@ AstrBot 插件“框”。
 ```bash
 pip install -r requirements.txt
 ```
+
+随机框分布审阅示例：
+
+```bash
+python examples/generate_random_box_samples.py
+```
+
+默认会在 `sample_output/random_box_samples/` 下生成 20 张 `300x300` 透视分布预览图。

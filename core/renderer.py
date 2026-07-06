@@ -29,7 +29,7 @@ class EspBoxRenderer:
         with Image.open(image_path) as image:
             base = image.convert("RGBA")
 
-        composed = self._draw_boxes(base, boxes).convert("RGB")
+        composed = self.draw_boxes(base, boxes).convert("RGB")
         output_path = os.path.join(output_dir, f"kuang_{uuid.uuid4().hex}.png")
         composed.save(output_path, format="PNG")
         return output_path
@@ -68,7 +68,7 @@ class EspBoxRenderer:
                     current_boxes = detector.detect(detector._load_numpy().array(rgb_frame))
                     next_detect_at_ms = cumulative_ms + self.GIF_DETECT_INTERVAL_MS
 
-                rendered_frames.append(self._draw_boxes(rgba_frame, current_boxes))
+                rendered_frames.append(self.draw_boxes(rgba_frame, current_boxes))
                 durations.append(max(20, duration))
                 cumulative_ms += max(20, duration)
 
@@ -83,7 +83,7 @@ class EspBoxRenderer:
             output_dir=output_dir,
         )
 
-    def _draw_boxes(self, base, boxes: list[DetectionBox]):
+    def draw_boxes(self, base, boxes: list[DetectionBox]):
         from PIL import Image, ImageDraw
 
         overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
@@ -94,9 +94,11 @@ class EspBoxRenderer:
             int(round(min(base.size) * 0.0022)),
         )
         outline = (255, 255, 255, self.line_alpha)
+        shadow = (0, 0, 0, 255)
 
         for box in boxes:
             x1, y1, x2, y2 = box.as_tuple()
+            draw.rectangle((x1 + 1, y1 + 1, x2 + 1, y2 + 1), outline=shadow, width=1)
             draw.rectangle((x1, y1, x2, y2), outline=outline, width=dynamic_width)
 
         return Image.alpha_composite(base, overlay)
