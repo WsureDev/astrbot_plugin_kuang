@@ -1,6 +1,7 @@
 from .cascade_backend import CascadeDetectionBackend
 from .detection_backend import DetectionBackend
 from .detector import EspBoxDetector
+from .logger import configure as configure_logger
 from .models import DetectionBox
 from .processor import EspBoxProcessor
 from .renderer import EspBoxRenderer
@@ -15,4 +16,5 @@ __all__ = [
     "EspBoxProcessor",
     "EspBoxRenderer",
     "Yolo26nDetectionBackend",
+    "configure_logger",
 ]

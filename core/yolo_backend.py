@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import logging
 import shutil
 from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
 
+from .logger import get_logger
 from .models import DetectionBox
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 DEFAULT_YOLO26N_MODEL_URL = (
     "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.onnx"
@@ -175,6 +175,11 @@ class BaseYoloOnnxDetectionBackend:
             len(detections),
             len(selected),
         )
+        _logger.debug(
+            "[%s] detect details: %s",
+            self.source_name,
+            self._summarize_detections(selected),
+        )
         return selected
 
     def load_numpy(self):
@@ -302,9 +307,23 @@ class BaseYoloOnnxDetectionBackend:
         np = self.load_numpy()
         session = self._get_session()
         tensor, scale, pad_x, pad_y = self._prepare_input(image_rgb)
+        _logger.debug(
+            "[%s] infer: tensor_shape=%s scale=%.4f pad_x=%.1f pad_y=%.1f",
+            self.source_name,
+            tuple(tensor.shape),
+            scale,
+            pad_x,
+            pad_y,
+        )
         outputs = session.run(None, {self._input_name: tensor})
         if not outputs:
             raise RuntimeError(f"{self.source_name} ONNX 推理未返回任何输出。")
+        _logger.debug(
+            "[%s] infer outputs=%s first_shape=%s",
+            self.source_name,
+            len(outputs),
+            tuple(getattr(outputs[0], "shape", ()) or ()),
+        )
         return np.asarray(outputs[0]), scale, pad_x, pad_y
 
     def _prepare_input(self, image_rgb):
@@ -442,6 +461,19 @@ class BaseYoloOnnxDetectionBackend:
                 continue
             selected.append(candidate)
         return selected
+
+    @staticmethod
+    def _summarize_detections(detections: list[DetectionBox]) -> str:
+        if not detections:
+            return "<none>"
+        return ", ".join(
+            (
+                f"{item.category}"
+                f"@{item.score:.2f}"
+                f"[{item.x1},{item.y1},{item.x2},{item.y2}]"
+            )
+            for item in detections
+        )
 
     @staticmethod
     def _iou(left: DetectionBox, right: DetectionBox) -> float:

@@ -9,7 +9,7 @@ from astrbot.api.all import At, Image, Reply
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 
-from .core import EspBoxDetector, EspBoxProcessor, EspBoxRenderer
+from .core import EspBoxDetector, EspBoxProcessor, EspBoxRenderer, configure_logger
 
 _PLUGIN_NAME = "astrbot_plugin_kuang"
 _DEFAULT_QQ_AVATAR = "https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
@@ -28,6 +28,7 @@ class KuangPlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
+        configure_logger(logger)
         self.plugin_data_dir = StarTools.get_data_dir(_PLUGIN_NAME)
         self.output_dir = self.plugin_data_dir / "output"
         self.model_dir = self.plugin_data_dir / "models"
@@ -135,6 +136,11 @@ class KuangPlugin(Star):
         reply_images = [] if direct_images else self._collect_reply_images(event)
         image_targets = direct_images or reply_images
         avatar_mode = False
+        if self.debug_mode:
+            logger.info(
+                f"[{_PLUGIN_NAME}] image collection: direct={len(direct_images)}, "
+                f"reply={len(reply_images)}, selected={len(image_targets)}"
+            )
 
         if not image_targets:
             avatar_target = self._build_avatar_target(event)
@@ -161,6 +167,10 @@ class KuangPlugin(Star):
                 )
                 event.track_temporary_local_file(output_path)
                 output_paths.append(output_path)
+                if self.debug_mode:
+                    logger.info(
+                        f"[{_PLUGIN_NAME}] processing succeeded: input={input_path}, output={output_path}"
+                    )
             except Exception as exc:
                 last_error_message = str(exc).strip()
                 logger.warning(
@@ -214,9 +224,15 @@ class KuangPlugin(Star):
             for attr_name in ("avatar", "avatar_url", "face_url", "face"):
                 avatar_value = str(getattr(sender, attr_name, "") or "").strip()
                 if avatar_value.startswith("http://") or avatar_value.startswith("https://"):
+                    if self.debug_mode:
+                        logger.info(
+                            f"[{_PLUGIN_NAME}] avatar target resolved from sender.{attr_name}: {avatar_value}"
+                        )
                     return Image.fromURL(avatar_value)
 
         if not avatar_user_id:
+            if self.debug_mode:
+                logger.info(f"[{_PLUGIN_NAME}] avatar target unavailable: no target_user_id or sender_id")
             return None
 
         template = str(self.config.get("avatar_url_template", "")).strip()
@@ -226,11 +242,24 @@ class KuangPlugin(Star):
                 platform_name=event.get_platform_name(),
                 platform_id=event.get_platform_id(),
             )
+            if self.debug_mode:
+                logger.info(
+                    f"[{_PLUGIN_NAME}] avatar target resolved from template: user_id={avatar_user_id}, url={avatar_url}"
+                )
             return Image.fromURL(avatar_url)
 
         if avatar_user_id.isdigit():
-            return Image.fromURL(_DEFAULT_QQ_AVATAR.format(user_id=avatar_user_id))
+            avatar_url = _DEFAULT_QQ_AVATAR.format(user_id=avatar_user_id)
+            if self.debug_mode:
+                logger.info(
+                    f"[{_PLUGIN_NAME}] avatar target resolved from default QQ avatar: user_id={avatar_user_id}, url={avatar_url}"
+                )
+            return Image.fromURL(avatar_url)
 
+        if self.debug_mode:
+            logger.info(
+                f"[{_PLUGIN_NAME}] avatar target unavailable: non-numeric user_id={avatar_user_id!r}"
+            )
         return None
 
     def _extract_at_target_id(self, event: AstrMessageEvent) -> str:

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from .cascade_backend import CascadeDetectionBackend
 from .detection_backend import DetectionBackend
+from .logger import get_logger
 from .models import DetectionBox
 from .random_layout import PerspectiveRandomBoxGenerator
 from .yolo_backend import (
@@ -19,7 +19,7 @@ _DETECTION_BACKENDS = {
     "anime_yolo": AnimeYoloDetectionBackend,
 }
 _CASCADE_YOLO26N_ANIME_BACKEND = "cascade_yolo26n_anime"
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 
 class EspBoxDetector:
@@ -99,8 +99,15 @@ class EspBoxDetector:
             return np.array(image.convert("RGB"))
 
     def detect_from_path(self, image_path: str) -> list[DetectionBox]:
+        _logger.debug("[detector] detect_from_path start: %s", image_path)
         image = self.load_image(image_path)
-        return self.detect(image)
+        detections = self.detect(image)
+        _logger.debug(
+            "[detector] detect_from_path done: %s detections for %s",
+            len(detections),
+            image_path,
+        )
+        return detections
 
     def detect(self, image_rgb) -> list[DetectionBox]:
         image_height, image_width = image_rgb.shape[:2]
@@ -110,6 +117,10 @@ class EspBoxDetector:
             len(recognized),
             image_width,
             image_height,
+        )
+        _logger.debug(
+            "[detector] backend detection details: %s",
+            self._summarize_detections(recognized),
         )
         if self.enable_random_boxes and len(recognized) < self.box_count:
             missing = self.box_count - len(recognized)
@@ -133,7 +144,13 @@ class EspBoxDetector:
                 len(recognized),
                 self.box_count,
             )
-        return recognized[: self.box_count]
+        final_detections = recognized[: self.box_count]
+        _logger.debug(
+            "[detector] final detections=%s details=%s",
+            len(final_detections),
+            self._summarize_detections(final_detections),
+        )
+        return final_detections
 
     def generate_random_layout_preview(
         self,
@@ -249,4 +266,17 @@ class EspBoxDetector:
             confidence_threshold=confidence_threshold,
             nms_iou_threshold=nms_iou_threshold,
             model_input_size=model_input_size,
+        )
+
+    @staticmethod
+    def _summarize_detections(detections: list[DetectionBox]) -> str:
+        if not detections:
+            return "<none>"
+        return ", ".join(
+            (
+                f"{item.source}:{item.category}"
+                f"@{item.score:.2f}"
+                f"[{item.x1},{item.y1},{item.x2},{item.y2}]"
+            )
+            for item in detections
         )

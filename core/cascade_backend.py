@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import logging
-
 from .detection_backend import DetectionBackend
+from .logger import get_logger
 from .models import DetectionBox
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 
 class CascadeDetectionBackend:
@@ -32,6 +31,10 @@ class CascadeDetectionBackend:
             self.fallback_trigger_count,
             self.secondary_backend is not None,
         )
+        _logger.debug(
+            "[cascade] primary details: %s",
+            self._summarize_detections(primary),
+        )
         if self.secondary_backend is None:
             return primary
         if len(primary) >= self.fallback_trigger_count:
@@ -51,7 +54,17 @@ class CascadeDetectionBackend:
             len(secondary),
             len(primary),
         )
-        return self._merge_detections(primary, secondary)
+        _logger.debug(
+            "[cascade] secondary details: %s",
+            self._summarize_detections(secondary),
+        )
+        merged = self._merge_detections(primary, secondary)
+        _logger.debug(
+            "[cascade] merged detections=%s details=%s",
+            len(merged),
+            self._summarize_detections(merged),
+        )
+        return merged
 
     def load_numpy(self):
         for backend in (self.primary_backend, self.secondary_backend):
@@ -90,6 +103,19 @@ class CascadeDetectionBackend:
         return sorted(
             merged,
             key=lambda item: (item.priority, -item.score, -item.area),
+        )
+
+    @staticmethod
+    def _summarize_detections(detections: list[DetectionBox]) -> str:
+        if not detections:
+            return "<none>"
+        return ", ".join(
+            (
+                f"{item.source}:{item.category}"
+                f"@{item.score:.2f}"
+                f"[{item.x1},{item.y1},{item.x2},{item.y2}]"
+            )
+            for item in detections
         )
 
     @staticmethod
