@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
 from astrbot.api import logger
 from astrbot.api.all import At, Image, Reply
@@ -11,13 +12,14 @@ from .core import EspBoxDetector, EspBoxRenderer
 
 _PLUGIN_NAME = "astrbot_plugin_kuang"
 _DEFAULT_QQ_AVATAR = "https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
+_BIDI_CONTROL_RE = re.compile(r"[\u202A-\u202E\u2066-\u2069]")
 
 
 @register(
     "kuang",
     "WsureDev",
     "为图片叠加 FPS 外挂透视风格白色线框",
-    "0.6.0",
+    "0.7.0",
     "https://github.com/WsureDev/astrbot_plugin_kuang",
 )
 class KuangPlugin(Star):
@@ -65,8 +67,10 @@ class KuangPlugin(Star):
             line_alpha=int(self.config.get("line_alpha", 220)),
         )
 
-    @filter.regex(r"^(?:\s|\[At:[^\]]+\])*\s*框\s*(?:\s|\[At:[^\]]+\])*$")
+    @filter.regex(r"框")
     async def kuang(self, event: AstrMessageEvent):
+        if not self._is_kuang_trigger(event):
+            return
         async for result in self._do_kuang(event):
             yield result
 
@@ -157,6 +161,23 @@ class KuangPlugin(Star):
                 if isinstance(reply_component, Image):
                     images.append(reply_component)
         return images
+
+    def _is_kuang_trigger(self, event: AstrMessageEvent) -> bool:
+        text_parts: list[str] = []
+        for component in event.get_messages():
+            if isinstance(component, At | Image | Reply):
+                continue
+            text = str(getattr(component, "text", "") or "")
+            if text:
+                text_parts.append(text)
+
+        normalized = self._normalize_trigger_text("".join(text_parts))
+        return normalized == "框"
+
+    @staticmethod
+    def _normalize_trigger_text(text: str) -> str:
+        cleaned = _BIDI_CONTROL_RE.sub("", str(text or ""))
+        return re.sub(r"\s+", "", cleaned)
 
     def _build_avatar_target(self, event: AstrMessageEvent) -> Image | None:
         target_user_id = self._extract_at_target_id(event)
