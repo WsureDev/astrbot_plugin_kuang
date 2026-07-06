@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as _datetime
 import shutil
 from pathlib import Path
 from typing import Any
@@ -204,10 +205,12 @@ class BaseYoloOnnxDetectionBackend:
 
     def _ensure_model_file(self) -> Path:
         if self.model_path.exists():
+            file_size = self._safe_file_size(self.model_path)
             _logger.debug(
-                "[%s] using local model file: %s",
+                "[%s] using local model file: %s size=%s",
                 self.source_name,
                 self.model_path,
+                file_size,
             )
             return self.model_path
 
@@ -269,13 +272,7 @@ class BaseYoloOnnxDetectionBackend:
 
         ort = self._load_onnxruntime()
         model_path = self._ensure_model_file()
-        try:
-            session = ort.InferenceSession(
-                str(model_path),
-                providers=["CPUExecutionProvider"],
-            )
-        except Exception as exc:
-            raise RuntimeError(f"{self.source_name} ONNX 模型加载失败: {exc}") from exc
+        session = self._create_session_with_recovery(ort, model_path)
 
         input_meta = session.get_inputs()
         if not input_meta:
@@ -292,6 +289,84 @@ class BaseYoloOnnxDetectionBackend:
             self._input_size,
         )
         return self._session
+
+    def _create_session_with_recovery(self, ort, model_path: Path):
+        try:
+            return ort.InferenceSession(
+                str(model_path),
+                providers=["CPUExecutionProvider"],
+            )
+        except Exception as exc:
+            file_size = self._safe_file_size(model_path)
+            _logger.warning(
+                "[%s] model session creation failed: path=%s size=%s error=%s",
+                self.source_name,
+                model_path,
+                file_size,
+                exc,
+            )
+            if not self._should_retry_model_load(exc):
+                raise RuntimeError(f"{self.source_name} ONNX 模型加载失败: {exc}") from exc
+
+            backup_path = self._backup_invalid_model_file(model_path)
+            _logger.warning(
+                "[%s] detected corrupted ONNX model, removed local file and retrying download once: backup=%s",
+                self.source_name,
+                backup_path or "<backup_failed>",
+            )
+            refreshed_model_path = self._ensure_model_file()
+            try:
+                return ort.InferenceSession(
+                    str(refreshed_model_path),
+                    providers=["CPUExecutionProvider"],
+                )
+            except Exception as retry_exc:
+                retry_size = self._safe_file_size(refreshed_model_path)
+                raise RuntimeError(
+                    f"{self.source_name} ONNX 模型加载失败，已重下 1 次仍不可用: "
+                    f"path={refreshed_model_path} size={retry_size} error={retry_exc}"
+                ) from retry_exc
+
+    def _should_retry_model_load(self, exc: Exception) -> bool:
+        if not self.auto_download_model or not self.model_url:
+            return False
+        if not self.model_path.exists():
+            return False
+        text = str(exc).lower()
+        return any(
+            marker in text
+            for marker in (
+                "invalid_protobuf",
+                "protobuf parsing failed",
+                "modelproto",
+                "load model",
+            )
+        )
+
+    def _backup_invalid_model_file(self, model_path: Path) -> str:
+        try:
+            if model_path.exists():
+                timestamp = _datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+                backup_path = model_path.with_suffix(
+                    f"{model_path.suffix}.invalid.{timestamp}"
+                )
+                model_path.replace(backup_path)
+                return str(backup_path)
+        except Exception as exc:
+            _logger.warning(
+                "[%s] failed to back up invalid model file before retry: path=%s error=%s",
+                self.source_name,
+                model_path,
+                exc,
+            )
+        return ""
+
+    @staticmethod
+    def _safe_file_size(model_path: Path) -> int:
+        try:
+            return model_path.stat().st_size
+        except OSError:
+            return -1
 
     def _resolve_input_size(self, shape: list[Any] | tuple[Any, ...]) -> tuple[int, int]:
         height = self.model_input_size
