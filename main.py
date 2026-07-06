@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 
 from astrbot.api import logger
@@ -34,6 +35,10 @@ class KuangPlugin(Star):
         self.model_dir.mkdir(parents=True, exist_ok=True)
 
         self.debug_mode = bool(self.config.get("debug_mode", False))
+        if self.debug_mode:
+            logging.getLogger().setLevel(logging.DEBUG)
+            logger.info(f"[{_PLUGIN_NAME}] debug_mode=True，已将根 logger 级别设为 DEBUG")
+
         configured_model_path = str(self.config.get("model_path", "")).strip()
         model_path = (
             configured_model_path
@@ -48,6 +53,20 @@ class KuangPlugin(Star):
             if configured_anime_model_path
             else str(self.model_dir / "anime_yolo.onnx")
         )
+        detector_backend = str(self.config.get("detector_backend", "yolo26n")).strip()
+        enable_anime_fallback = bool(self.config.get("enable_anime_fallback", False))
+        anime_model_url = str(self.config.get("anime_model_url", "")).strip()
+        anime_auto_download_model = bool(
+            self.config.get("anime_auto_download_model", True)
+        )
+        if self.debug_mode:
+            logger.info(
+                f"[{_PLUGIN_NAME}] detector config: backend={detector_backend}, "
+                f"enable_anime_fallback={enable_anime_fallback}, "
+                f"model_path={model_path}, anime_model_path={anime_model_path}, "
+                f"anime_auto_download_model={anime_auto_download_model}, "
+                f"anime_model_url={anime_model_url or '<default>'}"
+            )
         self.detector = EspBoxDetector(
             box_count=int(self.config.get("box_count", 5)),
             model_path=model_path,
@@ -73,15 +92,11 @@ class KuangPlugin(Star):
             enable_random_boxes=bool(
                 self.config.get("enable_random_boxes", True)
             ),
-            backend_name=str(self.config.get("detector_backend", "yolo26n")).strip(),
-            enable_anime_fallback=bool(
-                self.config.get("enable_anime_fallback", False)
-            ),
+            backend_name=detector_backend,
+            enable_anime_fallback=enable_anime_fallback,
             anime_model_path=anime_model_path,
-            anime_model_url=str(self.config.get("anime_model_url", "")).strip(),
-            anime_auto_download_model=bool(
-                self.config.get("anime_auto_download_model", False)
-            ),
+            anime_model_url=anime_model_url,
+            anime_auto_download_model=anime_auto_download_model,
             anime_confidence_threshold=float(
                 self.config.get("anime_confidence_threshold", 0.25)
             ),
@@ -130,12 +145,16 @@ class KuangPlugin(Star):
                 return
             image_targets = [avatar_target]
             avatar_mode = True
+            if self.debug_mode:
+                logger.info(f"[{_PLUGIN_NAME}] no image found, falling back to avatar mode")
 
         output_paths: list[str] = []
         last_error_message = ""
         for image_target in image_targets:
             try:
                 input_path = await image_target.convert_to_file_path()
+                if self.debug_mode:
+                    logger.info(f"[{_PLUGIN_NAME}] processing image target: {input_path}")
                 output_path = await asyncio.to_thread(
                     self.processor.render_path,
                     input_path,
@@ -227,4 +246,9 @@ class KuangPlugin(Star):
     def _matches_kuang_trigger(self, event: AstrMessageEvent) -> bool:
         message_str = str(event.get_message_str() or "")
         sanitized = _BIDI_CONTROL_RE.sub("", message_str).strip()
-        return bool(_KUANG_TRIGGER_RE.search(sanitized))
+        matched = bool(_KUANG_TRIGGER_RE.search(sanitized))
+        if self.debug_mode:
+            logger.info(
+                f"[{_PLUGIN_NAME}] trigger check: raw={message_str!r}, sanitized={sanitized!r}, matched={matched}"
+            )
+        return matched

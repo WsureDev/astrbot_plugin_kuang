@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from .detection_backend import DetectionBackend
 from .models import DetectionBox
+
+_logger = logging.getLogger(__name__)
 
 
 class CascadeDetectionBackend:
@@ -22,9 +26,16 @@ class CascadeDetectionBackend:
 
     def detect(self, image_rgb) -> list[DetectionBox]:
         primary = list(self.primary_backend.detect(image_rgb))
+        _logger.debug(
+            "[cascade] primary detections=%s trigger_count=%s secondary_enabled=%s",
+            len(primary),
+            self.fallback_trigger_count,
+            self.secondary_backend is not None,
+        )
         if self.secondary_backend is None:
             return primary
         if len(primary) >= self.fallback_trigger_count:
+            _logger.debug("[cascade] skip secondary because primary detections are enough")
             return primary
 
         try:
@@ -32,8 +43,14 @@ class CascadeDetectionBackend:
         except Exception:
             if not self.ignore_secondary_errors:
                 raise
+            _logger.exception("[cascade] secondary backend failed, using primary only")
             return primary
 
+        _logger.debug(
+            "[cascade] secondary detections=%s, merging with primary=%s",
+            len(secondary),
+            len(primary),
+        )
         return self._merge_detections(primary, secondary)
 
     def load_numpy(self):

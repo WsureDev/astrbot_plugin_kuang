@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 from pathlib import Path
 from typing import Any
@@ -7,10 +8,14 @@ from urllib.request import urlopen
 
 from .models import DetectionBox
 
+_logger = logging.getLogger(__name__)
+
 DEFAULT_YOLO26N_MODEL_URL = (
     "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.onnx"
 )
-DEFAULT_ANIME_YOLO_MODEL_URL = ""
+DEFAULT_ANIME_YOLO_MODEL_URL = (
+    "https://huggingface.co/laowanglaowang/yolov11m_anime_Image_segmentation/resolve/main/best.onnx"
+)
 
 _COCO_CLASS_NAMES = [
     "person",
@@ -139,6 +144,16 @@ class BaseYoloOnnxDetectionBackend:
             self.model_input_size,
             self.model_input_size,
         )
+        _logger.debug(
+            "[%s] backend init: model_path=%s auto_download=%s model_url=%s conf=%.3f iou=%.3f input=%s",
+            self.source_name,
+            self.model_path,
+            self.auto_download_model,
+            self.model_url or "<empty>",
+            self.confidence_threshold,
+            self.nms_iou_threshold,
+            self._input_size,
+        )
 
     def detect(self, image_rgb) -> list[DetectionBox]:
         image_height, image_width = image_rgb.shape[:2]
@@ -151,7 +166,16 @@ class BaseYoloOnnxDetectionBackend:
             pad_x=pad_x,
             pad_y=pad_y,
         )
-        return self._select_recognized_boxes(detections)
+        selected = self._select_recognized_boxes(detections)
+        _logger.debug(
+            "[%s] detect: image=%sx%s raw_candidates=%s selected=%s",
+            self.source_name,
+            image_width,
+            image_height,
+            len(detections),
+            len(selected),
+        )
+        return selected
 
     def load_numpy(self):
         if self._np is None:
@@ -175,29 +199,59 @@ class BaseYoloOnnxDetectionBackend:
 
     def _ensure_model_file(self) -> Path:
         if self.model_path.exists():
+            _logger.debug(
+                "[%s] using local model file: %s",
+                self.source_name,
+                self.model_path,
+            )
             return self.model_path
 
         if not self.auto_download_model:
+            _logger.debug(
+                "[%s] model file missing and auto download disabled: %s",
+                self.source_name,
+                self.model_path,
+            )
             raise RuntimeError(
                 f"未找到 {self.source_name} 模型文件: {self.model_path}. "
                 "请在配置中指定 model_path，或开启 auto_download_model。"
             )
         if not self.model_url:
+            _logger.debug(
+                "[%s] model file missing and no download url configured",
+                self.source_name,
+            )
             raise RuntimeError(f"未配置 {self.source_name} 模型下载地址 model_url。")
 
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = self.model_path.with_suffix(f"{self.model_path.suffix}.download")
+        _logger.info(
+            "[%s] model file missing, downloading from %s -> %s",
+            self.source_name,
+            self.model_url,
+            self.model_path,
+        )
         try:
             with urlopen(self.model_url, timeout=60) as response, temp_path.open(
                 "wb"
             ) as file_obj:
                 shutil.copyfileobj(response, file_obj)
             temp_path.replace(self.model_path)
+            _logger.info(
+                "[%s] model download completed: %s",
+                self.source_name,
+                self.model_path,
+            )
         except Exception as exc:
             try:
                 temp_path.unlink(missing_ok=True)
             except OSError:
                 pass
+            _logger.error(
+                "[%s] model download failed: %s",
+                self.source_name,
+                exc,
+            )
             raise RuntimeError(
                 f"{self.source_name} 模型下载失败，请检查网络或手动放置模型文件: {exc}"
             ) from exc
@@ -225,6 +279,13 @@ class BaseYoloOnnxDetectionBackend:
         self._session = session
         self._input_name = input_meta[0].name
         self._input_size = self._resolve_input_size(input_meta[0].shape)
+        _logger.info(
+            "[%s] model session ready: path=%s input_name=%s input_size=%s",
+            self.source_name,
+            model_path,
+            self._input_name,
+            self._input_size,
+        )
         return self._session
 
     def _resolve_input_size(self, shape: list[Any] | tuple[Any, ...]) -> tuple[int, int]:

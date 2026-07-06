@@ -67,15 +67,15 @@
   },
   "anime_model_url": {
     "description": "动漫 YOLO 模型下载地址",
-    "hint": "仅在开启二次元检测兜底且 anime_auto_download_model 为 true 时使用。未提供默认地址，需手动填写可用的 ONNX 下载链接。",
+    "hint": "仅在开启二次元检测兜底且 anime_auto_download_model 为 true 时使用。默认使用现成的 Hugging Face ONNX 地址。",
     "type": "string",
-    "default": ""
+    "default": "https://huggingface.co/laowanglaowang/yolov11m_anime_Image_segmentation/resolve/main/best.onnx"
   },
   "anime_auto_download_model": {
     "description": "自动下载动漫 YOLO 模型",
     "hint": "开启后，若本地缺少动漫模型文件，会尝试从 anime_model_url 下载。",
     "type": "bool",
-    "default": false
+    "default": true
   },
   "anime_confidence_threshold": {
     "description": "动漫 YOLO 识别置信度阈值",

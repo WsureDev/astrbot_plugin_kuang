@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .cascade_backend import CascadeDetectionBackend
@@ -18,6 +19,7 @@ _DETECTION_BACKENDS = {
     "anime_yolo": AnimeYoloDetectionBackend,
 }
 _CASCADE_YOLO26N_ANIME_BACKEND = "cascade_yolo26n_anime"
+_logger = logging.getLogger(__name__)
 
 
 class EspBoxDetector:
@@ -50,6 +52,16 @@ class EspBoxDetector:
     ) -> None:
         self.box_count = max(1, int(box_count))
         self.enable_random_boxes = bool(enable_random_boxes)
+        _logger.debug(
+            "[detector] init: backend=%s box_count=%s enable_random_boxes=%s enable_anime_fallback=%s anime_model_path=%s anime_auto_download=%s anime_trigger=%s",
+            backend_name,
+            self.box_count,
+            self.enable_random_boxes,
+            enable_anime_fallback,
+            anime_model_path or "<default>",
+            anime_auto_download_model,
+            anime_fallback_trigger_count,
+        )
         self._backend = detection_backend or self._build_detection_backend(
             backend_name=backend_name,
             model_path=model_path,
@@ -93,14 +105,33 @@ class EspBoxDetector:
     def detect(self, image_rgb) -> list[DetectionBox]:
         image_height, image_width = image_rgb.shape[:2]
         recognized = list(self._backend.detect(image_rgb))[: self.box_count]
+        _logger.debug(
+            "[detector] backend returned %s detections for image=%sx%s",
+            len(recognized),
+            image_width,
+            image_height,
+        )
         if self.enable_random_boxes and len(recognized) < self.box_count:
+            missing = self.box_count - len(recognized)
+            _logger.debug(
+                "[detector] random box fallback triggered: existing=%s missing=%s",
+                len(recognized),
+                missing,
+            )
             recognized.extend(
                 self._random_box_generator.generate_missing_boxes(
                     image_width,
                     image_height,
-                    self.box_count - len(recognized),
+                    missing,
                     recognized,
                 )
+            )
+        else:
+            _logger.debug(
+                "[detector] random box fallback skipped: enabled=%s detections=%s target=%s",
+                self.enable_random_boxes,
+                len(recognized),
+                self.box_count,
             )
         return recognized[: self.box_count]
 
@@ -150,10 +181,23 @@ class EspBoxDetector:
         anime_merge_iou_threshold: float,
     ) -> DetectionBackend:
         resolved_backend_name = str(backend_name or "yolo26n").strip().lower()
+        _logger.debug(
+            "[detector] build backend request: backend=%s enable_anime_fallback=%s",
+            resolved_backend_name,
+            enable_anime_fallback,
+        )
         if enable_anime_fallback and resolved_backend_name == "yolo26n":
             resolved_backend_name = _CASCADE_YOLO26N_ANIME_BACKEND
+            _logger.debug(
+                "[detector] anime fallback enabled, switching backend to %s",
+                resolved_backend_name,
+            )
 
         if resolved_backend_name == _CASCADE_YOLO26N_ANIME_BACKEND:
+            _logger.info(
+                "[detector] using cascade backend: primary=yolo26n secondary=anime_yolo trigger_count=%s",
+                anime_fallback_trigger_count,
+            )
             primary_backend = Yolo26nDetectionBackend(
                 model_path=model_path,
                 model_url=model_url or DEFAULT_YOLO26N_MODEL_URL,
@@ -179,6 +223,7 @@ class EspBoxDetector:
             )
 
         if resolved_backend_name == "anime_yolo":
+            _logger.info("[detector] using anime_yolo backend only")
             return AnimeYoloDetectionBackend(
                 model_path=anime_model_path,
                 model_url=anime_model_url or DEFAULT_ANIME_YOLO_MODEL_URL,
@@ -196,6 +241,7 @@ class EspBoxDetector:
             raise RuntimeError(
                 f"不支持的识别器后端: {resolved_backend_name}。当前支持: {supported}"
             )
+        _logger.info("[detector] using single backend: %s", resolved_backend_name)
         return backend_cls(
             model_path=model_path,
             model_url=model_url or DEFAULT_YOLO26N_MODEL_URL,
