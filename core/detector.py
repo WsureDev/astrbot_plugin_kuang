@@ -422,8 +422,8 @@ class EspBoxDetector:
         rng: random.Random,
     ) -> dict[str, Any]:
         horizon_y = image_height / 2.0
-        hfov_degrees = 92.0
-        vfov_degrees = 68.0
+        hfov_degrees = 98.0
+        vfov_degrees = 58.0
         focal_x = (image_width / 2.0) / self._tan_deg(hfov_degrees / 2.0)
         focal_y = (image_height / 2.0) / self._tan_deg(vfov_degrees / 2.0)
         camera_height = 1.65
@@ -433,7 +433,7 @@ class EspBoxDetector:
         attempts = 0
         while len(platforms) < platform_count and attempts < 40:
             attempts += 1
-            radius = rng.uniform(7.0, 18.0)
+            radius = rng.uniform(8.0, 22.0)
             angle_rad = self._deg_to_rad(rng.uniform(-70.0, 70.0))
             x = radius * self._sin(angle_rad)
             z = radius * self._cos(angle_rad)
@@ -533,8 +533,8 @@ class EspBoxDetector:
         if use_platform:
             platform = rng.choice(platforms)
             local_x = rng.uniform(
-                -(float(platform["width"]) * 0.32),
-                float(platform["width"]) * 0.32,
+                -(float(platform["width"]) * 0.34),
+                float(platform["width"]) * 0.34,
             )
             world_x = float(platform["x"]) + local_x
             world_z = float(platform["z"]) + rng.uniform(
@@ -544,8 +544,14 @@ class EspBoxDetector:
             foot_world_y = float(platform["height"])
             source = "random_platform"
         else:
-            radius = rng.triangular(5.0, 30.0, 12.0)
-            angle_rad = self._deg_to_rad(rng.uniform(-175.0, 175.0))
+            distance_bucket = rng.random()
+            if distance_bucket < 0.50:
+                radius = rng.uniform(3.2, 8.5)
+            elif distance_bucket < 0.82:
+                radius = rng.uniform(8.5, 18.0)
+            else:
+                radius = rng.uniform(18.0, 34.0)
+            angle_rad = self._deg_to_rad(rng.uniform(-82.0, 82.0))
             world_x = radius * self._sin(angle_rad)
             world_z = radius * self._cos(angle_rad)
             foot_world_y = 0.0
@@ -610,9 +616,13 @@ class EspBoxDetector:
         if x2 - x1 < 12 or y2 - y1 < 16:
             return None
 
-        if screen_foot_y < image_height * 0.50:
+        if screen_foot_y < image_height * 0.36:
             return None
-        if screen_center_x < image_width * 0.03 or screen_center_x > image_width * 0.97:
+        if screen_center_x < image_width * 0.01 or screen_center_x > image_width * 0.99:
+            return None
+        if screen_center_x < image_width * 0.14 and y1 < image_height * 0.18:
+            return None
+        if screen_center_x > image_width * 0.86 and y1 < image_height * 0.18:
             return None
 
         return DetectionBox(
@@ -732,8 +742,8 @@ class EspBoxDetector:
             slots.append(("platform", platform, -0.26))
             slots.append(("platform", platform, 0.26))
 
-        radius_slots = [5.0, 7.0, 9.0, 12.0, 16.0, 20.0, 25.0, 30.0]
-        angle_slots = [-78.0, -60.0, -42.0, -26.0, -12.0, 0.0, 12.0, 26.0, 42.0, 60.0, 78.0]
+        radius_slots = [3.5, 5.0, 7.0, 9.5, 13.0, 17.0, 22.0, 28.0, 34.0]
+        angle_slots = [-84.0, -68.0, -52.0, -36.0, -20.0, -8.0, 8.0, 20.0, 36.0, 52.0, 68.0, 84.0]
         for radius in radius_slots:
             for angle in angle_slots:
                 slots.append(("ground", radius, angle))
