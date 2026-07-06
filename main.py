@@ -8,7 +8,7 @@ from astrbot.api.all import At, Image, Reply
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 
-from .core import EspBoxDetector, EspBoxRenderer
+from .core import EspBoxDetector, EspBoxProcessor, EspBoxRenderer
 
 _PLUGIN_NAME = "astrbot_plugin_kuang"
 _DEFAULT_QQ_AVATAR = "https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
@@ -62,10 +62,19 @@ class KuangPlugin(Star):
             random_height_ratio_max=float(
                 self.config.get("random_height_ratio_max", 0.55)
             ),
+            enable_random_boxes=bool(
+                self.config.get("enable_random_boxes", True)
+            ),
+            backend_name=str(self.config.get("detector_backend", "yolo26n")).strip(),
         )
         self.renderer = EspBoxRenderer(
             line_width=int(self.config.get("line_width", 3)),
             line_alpha=int(self.config.get("line_alpha", 220)),
+        )
+        self.processor = EspBoxProcessor(
+            detector=self.detector,
+            renderer=self.renderer,
+            output_dir=self.output_dir,
         )
 
     @filter.regex(r"框")
@@ -97,7 +106,7 @@ class KuangPlugin(Star):
             try:
                 input_path = await image_target.convert_to_file_path()
                 output_path = await asyncio.to_thread(
-                    self._render_image_with_boxes,
+                    self.processor.render_path,
                     input_path,
                 )
                 event.track_temporary_local_file(output_path)
@@ -126,23 +135,6 @@ class KuangPlugin(Star):
 
         for output_path in output_paths:
             yield event.image_result(output_path)
-
-    def _render_image_with_boxes(self, image_path: str) -> str:
-        try:
-            from PIL import Image
-        except ImportError as exc:
-            raise RuntimeError("缺少 Pillow 依赖，请先安装 requirements.txt。") from exc
-
-        with Image.open(image_path) as image:
-            if image.format == "GIF" and getattr(image, "is_animated", False):
-                return self.renderer.render_gif(
-                    image_path,
-                    self.detector,
-                    str(self.output_dir),
-                )
-
-        boxes = self.detector.detect_from_path(image_path)
-        return self.renderer.render(image_path, boxes, str(self.output_dir))
 
     def _collect_direct_images(self, event: AstrMessageEvent) -> list[Image]:
         images: list[Image] = []

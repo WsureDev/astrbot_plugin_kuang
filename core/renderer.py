@@ -18,7 +18,7 @@ class EspBoxRenderer:
         output_dir: str,
     ) -> str:
         try:
-            from PIL import Image, ImageDraw
+            from PIL import Image
         except ImportError as exc:
             raise RuntimeError("缺少 Pillow 依赖，请先安装 requirements.txt。") from exc
 
@@ -30,44 +30,6 @@ class EspBoxRenderer:
         output_path = os.path.join(output_dir, f"kuang_{uuid.uuid4().hex}.png")
         composed.save(output_path, format="PNG")
         return output_path
-
-    def render_gif(
-        self,
-        image_path: str,
-        detector,
-        output_dir: str,
-    ) -> str:
-        try:
-            from PIL import Image, ImageSequence
-        except ImportError as exc:
-            raise RuntimeError("缺少 Pillow 依赖，请先安装 requirements.txt。") from exc
-
-        os.makedirs(output_dir, exist_ok=True)
-
-        rendered_frames = []
-        durations: list[int] = []
-
-        with Image.open(image_path) as image:
-            base_duration = int(image.info.get("duration", 100) or 100)
-            loop = int(image.info.get("loop", 0) or 0)
-
-            for frame in ImageSequence.Iterator(image):
-                duration = int(frame.info.get("duration", base_duration) or base_duration)
-                rgba_frame = frame.convert("RGBA")
-                rgb_frame = rgba_frame.convert("RGB")
-                current_boxes = detector.detect(detector._load_numpy().array(rgb_frame))
-                rendered_frames.append(self.draw_boxes(rgba_frame, current_boxes))
-                durations.append(max(20, duration))
-
-        if not rendered_frames:
-            raise RuntimeError("GIF 中没有可处理的帧。")
-
-        return self._save_gif(
-            frames=rendered_frames,
-            durations=durations,
-            loop=loop,
-            output_dir=output_dir,
-        )
 
     def draw_boxes(self, base, boxes: list[DetectionBox]):
         from PIL import Image, ImageDraw
@@ -89,7 +51,7 @@ class EspBoxRenderer:
 
         return Image.alpha_composite(base, overlay)
 
-    def _save_gif(
+    def save_gif(
         self,
         *,
         frames,
@@ -102,6 +64,7 @@ class EspBoxRenderer:
         except ImportError as exc:
             raise RuntimeError("缺少 Pillow 依赖，请先安装 requirements.txt。") from exc
 
+        os.makedirs(output_dir, exist_ok=True)
         prepared_frames = [
             frame.convert("P", palette=Image.Palette.ADAPTIVE, colors=256)
             for frame in frames

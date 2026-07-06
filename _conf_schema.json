@@ -1,7 +1,7 @@
 {
   "box_count": {
     "description": "每张图输出的线框数量",
-    "hint": "按需求默认固定为 5。YOLO26n 识别出的目标不足时会自动补随机框。",
+    "hint": "默认最多输出 5 个框。开启随机补框时，YOLO26n 识别不足会自动补齐；关闭后只保留识别出的框。",
     "type": "int",
     "default": 5
   },
@@ -23,6 +23,12 @@
     "type": "int",
     "default": 640
   },
+  "detector_backend": {
+    "description": "识别器后端",
+    "hint": "当前仅支持 yolo26n。这个配置项用于后续切换更多识别实现。",
+    "type": "string",
+    "default": "yolo26n"
+  },
   "model_path": {
     "description": "YOLO26n 模型文件路径",
     "hint": "留空时使用插件数据目录下的 models/yolo26n.onnx。若文件不存在且开启自动下载，将自动拉取官方模型。",
@@ -38,6 +44,12 @@
   "auto_download_model": {
     "description": "自动下载 YOLO26n 模型",
     "hint": "开启后，首次缺少模型文件时会自动下载到插件数据目录。",
+    "type": "bool",
+    "default": true
+  },
+  "enable_random_boxes": {
+    "description": "启用随机补框",
+    "hint": "默认开启。关闭后只保留 YOLO26n 识别到的框，不再补齐到固定数量。",
     "type": "bool",
     "default": true
   },
