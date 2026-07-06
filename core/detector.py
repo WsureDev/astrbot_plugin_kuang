@@ -421,83 +421,104 @@ class EspBoxDetector:
         image_height: int,
         rng: random.Random,
     ) -> dict[str, Any]:
-        horizon_y = max(24, int(round(image_height * 0.20)))
-        ground_bottom_y = image_height - 1
-        vanishing_x = image_width / 2.0
+        horizon_y = image_height / 2.0
+        hfov_degrees = 92.0
+        vfov_degrees = 68.0
+        focal_x = (image_width / 2.0) / self._tan_deg(hfov_degrees / 2.0)
+        focal_y = (image_height / 2.0) / self._tan_deg(vfov_degrees / 2.0)
+        camera_height = 1.65
         platforms: list[dict[str, Any]] = []
 
-        platform_count = 2 + rng.randint(0, 2)
+        platform_count = 1 + rng.randint(0, 1)
         attempts = 0
-        while len(platforms) < platform_count and attempts < 24:
+        while len(platforms) < platform_count and attempts < 40:
             attempts += 1
-            depth = rng.uniform(0.25, 0.74)
-            ground_y = self._project_ground_y(horizon_y, ground_bottom_y, depth)
-            person_height = self._project_person_height(image_height, depth)
-            crate_height = max(12, int(person_height * rng.uniform(0.28, 0.62)))
-            top_y = max(horizon_y + 8, ground_y - crate_height)
-            lateral_extent = self._lateral_extent(depth)
-            center_x = int(
-                round(
-                    image_width
-                    * (0.5 + rng.uniform(-0.95, 0.95) * lateral_extent * 0.95)
-                )
-            )
-            half_width = max(
-                18,
-                int(image_width * (0.06 + depth * 0.08) * rng.uniform(0.9, 1.25)),
-            )
-            x1 = max(0, center_x - half_width)
-            x2 = min(image_width, center_x + half_width)
-            if x2 - x1 < 30:
+            radius = rng.uniform(7.0, 18.0)
+            angle_rad = self._deg_to_rad(rng.uniform(-70.0, 70.0))
+            x = radius * self._sin(angle_rad)
+            z = radius * self._cos(angle_rad)
+            width = rng.uniform(1.8, 3.2)
+            depth = rng.uniform(1.2, 2.2)
+            height = rng.uniform(0.45, 1.10)
+            if z <= (depth / 2.0) + 1.0:
                 continue
             if any(
-                abs(platform["top_y"] - top_y) < 10
-                and max(platform["x1"], x1) < min(platform["x2"], x2)
+                abs(platform["x"] - x) < ((platform["width"] + width) * 0.55)
+                and abs(platform["z"] - z) < ((platform["depth"] + depth) * 0.55)
                 for platform in platforms
             ):
                 continue
 
             platforms.append(
                 {
-                    "x1": x1,
-                    "x2": x2,
-                    "top_y": top_y,
-                    "ground_y": ground_y,
+                    "x": x,
+                    "z": z,
+                    "width": width,
                     "depth": depth,
+                    "height": height,
                 }
             )
 
-        platforms.sort(key=lambda item: (item["ground_y"], item["x1"]))
+        platforms.sort(key=lambda item: (item["z"], item["x"]))
         return {
             "horizon_y": horizon_y,
-            "ground_bottom_y": ground_bottom_y,
-            "vanishing_x": vanishing_x,
+            "camera_height": camera_height,
+            "hfov_degrees": hfov_degrees,
+            "vfov_degrees": vfov_degrees,
+            "focal_x": focal_x,
+            "focal_y": focal_y,
             "platforms": platforms,
         }
 
     @staticmethod
-    def _project_ground_y(horizon_y: int, ground_bottom_y: int, depth: float) -> int:
-        depth = max(0.0, min(1.0, depth))
-        return int(
-            round(
-                horizon_y + ((ground_bottom_y - horizon_y) * (depth**0.92))
-            )
-        )
+    def _deg_to_rad(value: float) -> float:
+        return value * 0.017453292519943295
 
     @staticmethod
-    def _lateral_extent(depth: float) -> float:
-        depth = max(0.0, min(1.0, depth))
-        return 0.14 + (depth * 0.38)
+    def _sin(value: float) -> float:
+        import math
+
+        return math.sin(value)
 
     def _project_person_height(self, image_height: int, depth: float) -> float:
-        max_height = image_height * self.random_height_ratio_max
+        max_height = image_height * min(self.random_height_ratio_max, 0.40)
         min_ratio = max(
             0.01,
-            min(self.random_height_ratio_min, self.random_height_ratio_max / 6.0),
+            min(self.random_height_ratio_min, 0.06),
         )
         min_height = image_height * min_ratio
         depth = max(0.0, min(1.0, depth))
-        return min_height + ((max_height - min_height) * (depth**1.55))
+        return min_height + ((max_height - min_height) * (depth**2.35))
+
+    @staticmethod
+    def _cos(value: float) -> float:
+        import math
+
+        return math.cos(value)
+
+    @staticmethod
+    def _tan_deg(value: float) -> float:
+        import math
+
+        return math.tan(math.radians(value))
+
+    def _project_world_point(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        scene: dict[str, Any],
+        image_width: int,
+        image_height: int,
+    ) -> tuple[float, float] | None:
+        if z <= 0.2:
+            return None
+        focal_x = float(scene["focal_x"])
+        focal_y = float(scene["focal_y"])
+        camera_height = float(scene["camera_height"])
+        screen_x = (image_width / 2.0) + ((x * focal_x) / z)
+        screen_y = (image_height / 2.0) - (((y - camera_height) * focal_y) / z)
+        return screen_x, screen_y
 
     def _make_random_candidate(
         self,
@@ -507,64 +528,91 @@ class EspBoxDetector:
         scene: dict[str, Any],
     ) -> DetectionBox | None:
         platforms = scene["platforms"]
-        use_platform = bool(platforms) and rng.random() < 0.28
+        use_platform = bool(platforms) and rng.random() < 0.24
 
         if use_platform:
             platform = rng.choice(platforms)
-            depth = float(platform["depth"])
-            foot_y = int(platform["top_y"])
-            box_height = int(round(self._project_person_height(image_height, depth) * rng.uniform(0.92, 1.12)))
-            box_width = int(
-                round(
-                    box_height
-                    * rng.uniform(
-                        self.random_width_ratio_min,
-                        self.random_width_ratio_max,
-                    )
-                )
+            local_x = rng.uniform(
+                -(float(platform["width"]) * 0.32),
+                float(platform["width"]) * 0.32,
             )
-            min_center = platform["x1"] + (box_width // 2)
-            max_center = platform["x2"] - (box_width // 2)
-            if min_center >= max_center:
-                return None
-            center_x = rng.randint(min_center, max_center)
+            world_x = float(platform["x"]) + local_x
+            world_z = float(platform["z"]) + rng.uniform(
+                -(float(platform["depth"]) * 0.08),
+                float(platform["depth"]) * 0.08,
+            )
+            foot_world_y = float(platform["height"])
             source = "random_platform"
         else:
-            depth = max(0.08, min(1.0, rng.random() ** 1.35))
-            foot_y = self._project_ground_y(
-                scene["horizon_y"],
-                scene["ground_bottom_y"],
-                depth,
-            )
-            box_height = int(round(self._project_person_height(image_height, depth) * rng.uniform(0.9, 1.14)))
-            box_width = int(
-                round(
-                    box_height
-                    * rng.uniform(
-                        self.random_width_ratio_min,
-                        self.random_width_ratio_max,
-                    )
-                )
-            )
-            lateral_extent = self._lateral_extent(depth)
-            center_x = int(
-                round(
-                    image_width
-                    * (0.5 + rng.uniform(-1.0, 1.0) * lateral_extent)
-                )
-            )
+            radius = rng.triangular(5.0, 30.0, 12.0)
+            angle_rad = self._deg_to_rad(rng.uniform(-175.0, 175.0))
+            world_x = radius * self._sin(angle_rad)
+            world_z = radius * self._cos(angle_rad)
+            foot_world_y = 0.0
             source = "random_ground"
 
-        box_height = max(24, box_height)
-        box_width = max(16, box_width)
-        x1 = center_x - (box_width // 2)
-        y1 = foot_y - box_height
-        x2 = x1 + box_width
-        y2 = foot_y
-
-        if x1 < 0 or x2 > image_width:
+        if world_z <= 1.0:
             return None
-        if y1 < 0 or y2 > image_height or y2 <= y1:
+
+        foot_point = self._project_world_point(
+            world_x,
+            foot_world_y,
+            world_z,
+            scene,
+            image_width,
+            image_height,
+        )
+        if foot_point is None:
+            return None
+        screen_center_x, screen_foot_y = foot_point
+
+        top_world_y = foot_world_y + rng.uniform(1.58, 1.80)
+        top_point = self._project_world_point(
+            world_x,
+            top_world_y,
+            world_z,
+            scene,
+            image_width,
+            image_height,
+        )
+        if top_point is None:
+            return None
+
+        _, screen_top_y = top_point
+        box_height = int(round(screen_foot_y - screen_top_y))
+        if box_height < max(10, int(image_height * 0.035)):
+            return None
+
+        box_width = int(
+            round(
+                box_height
+                * rng.uniform(
+                    self.random_width_ratio_min,
+                    self.random_width_ratio_max,
+                )
+            )
+        )
+
+        x1 = int(round(screen_center_x - (box_width / 2.0)))
+        x2 = x1 + box_width
+        y2 = int(round(screen_foot_y))
+        y1 = y2 - box_height
+
+        if x2 <= 0 or x1 >= image_width:
+            return None
+        if y2 <= 0 or y1 >= image_height:
+            return None
+
+        x1 = max(0, x1)
+        x2 = min(image_width, x2)
+        y1 = max(0, y1)
+        y2 = min(image_height, y2)
+        if x2 - x1 < 12 or y2 - y1 < 16:
+            return None
+
+        if screen_foot_y < image_height * 0.50:
+            return None
+        if screen_center_x < image_width * 0.03 or screen_center_x > image_width * 0.97:
             return None
 
         return DetectionBox(
@@ -681,14 +729,14 @@ class EspBoxDetector:
 
         for platform in scene["platforms"]:
             slots.append(("platform", platform, 0.0))
-            slots.append(("platform", platform, -0.25))
-            slots.append(("platform", platform, 0.25))
+            slots.append(("platform", platform, -0.26))
+            slots.append(("platform", platform, 0.26))
 
-        depth_slots = [0.18, 0.28, 0.38, 0.50, 0.62, 0.74, 0.88]
-        lane_slots = [-0.82, -0.55, -0.28, 0.0, 0.28, 0.55, 0.82]
-        for depth in depth_slots:
-            for lane in lane_slots:
-                slots.append(("ground", depth, lane))
+        radius_slots = [5.0, 7.0, 9.0, 12.0, 16.0, 20.0, 25.0, 30.0]
+        angle_slots = [-78.0, -60.0, -42.0, -26.0, -12.0, 0.0, 12.0, 26.0, 42.0, 60.0, 78.0]
+        for radius in radius_slots:
+            for angle in angle_slots:
+                slots.append(("ground", radius, angle))
 
         rng.shuffle(slots)
         for slot_kind, slot_a, slot_b in slots:
@@ -697,54 +745,64 @@ class EspBoxDetector:
 
             if slot_kind == "platform":
                 platform = slot_a
-                depth = float(platform["depth"])
-                box_height = int(round(self._project_person_height(image_height, depth)))
-                box_width = int(
-                    round(
-                        box_height
-                        * ((self.random_width_ratio_min + self.random_width_ratio_max) / 2.0)
-                    )
-                )
-                center_x = int(
-                    round(
-                        ((platform["x1"] + platform["x2"]) / 2.0)
-                        + (((platform["x2"] - platform["x1"]) * 0.28) * float(slot_b))
-                    )
-                )
-                foot_y = int(platform["top_y"])
+                world_x = float(platform["x"]) + (float(slot_b) * float(platform["width"]) * 0.28)
+                world_z = float(platform["z"])
+                foot_world_y = float(platform["height"])
                 source = "random_platform_fallback"
             else:
-                depth = float(slot_a) + rng.uniform(-0.035, 0.035)
-                depth = max(0.12, min(0.94, depth))
-                foot_y = self._project_ground_y(
-                    scene["horizon_y"],
-                    scene["ground_bottom_y"],
-                    depth,
-                )
-                box_height = int(round(self._project_person_height(image_height, depth)))
-                box_width = int(
-                    round(
-                        box_height
-                        * ((self.random_width_ratio_min + self.random_width_ratio_max) / 2.0)
-                    )
-                )
-                center_x = int(
-                    round(
-                        image_width
-                        * (
-                            0.5
-                            + (float(slot_b) * self._lateral_extent(depth))
-                            + rng.uniform(-0.035, 0.035)
-                        )
-                    )
-                )
+                radius = float(slot_a)
+                angle_rad = self._deg_to_rad(float(slot_b))
+                world_x = radius * self._sin(angle_rad)
+                world_z = radius * self._cos(angle_rad)
+                foot_world_y = 0.0
                 source = "random_ground_fallback"
 
-            x1 = center_x - (box_width // 2)
-            y1 = foot_y - box_height
+            if world_z <= 1.0:
+                continue
+            foot_point = self._project_world_point(
+                world_x,
+                foot_world_y,
+                world_z,
+                scene,
+                image_width,
+                image_height,
+            )
+            top_point = self._project_world_point(
+                world_x,
+                foot_world_y + 1.70,
+                world_z,
+                scene,
+                image_width,
+                image_height,
+            )
+            if foot_point is None or top_point is None:
+                continue
+
+            screen_center_x, screen_foot_y = foot_point
+            _, screen_top_y = top_point
+            box_height = int(round(screen_foot_y - screen_top_y))
+            if box_height < max(10, int(image_height * 0.035)):
+                continue
+
+            box_width = int(
+                round(
+                    box_height
+                    * ((self.random_width_ratio_min + self.random_width_ratio_max) / 2.0)
+                )
+            )
+
+            x1 = int(round(screen_center_x - (box_width / 2.0)))
             x2 = x1 + box_width
-            y2 = foot_y
-            if x1 < 0 or x2 > image_width or y1 < 0 or y2 > image_height:
+            y2 = int(round(screen_foot_y))
+            y1 = y2 - box_height
+            if x2 <= 0 or x1 >= image_width or y2 <= 0 or y1 >= image_height:
+                continue
+
+            x1 = max(0, x1)
+            x2 = min(image_width, x2)
+            y1 = max(0, y1)
+            y2 = min(image_height, y2)
+            if x2 - x1 < 12 or y2 - y1 < 16:
                 continue
 
             candidate = DetectionBox(
