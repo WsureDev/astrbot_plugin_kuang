@@ -13,13 +13,14 @@ from .core import EspBoxDetector, EspBoxRenderer
 _PLUGIN_NAME = "astrbot_plugin_kuang"
 _DEFAULT_QQ_AVATAR = "https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
 _BIDI_CONTROL_RE = re.compile(r"[\u202A-\u202E\u2066-\u2069]")
+_KUANG_TRIGGER_RE = re.compile(r"^(?:\s|\[At:[^\]]+\])*\s*框\s*(?:\s|\[At:[^\]]+\])*$")
 
 
 @register(
     "kuang",
     "WsureDev",
     "为图片叠加 FPS 外挂透视风格白色线框",
-    "0.7.0",
+    "0.7.2",
     "https://github.com/WsureDev/astrbot_plugin_kuang",
 )
 class KuangPlugin(Star):
@@ -69,7 +70,7 @@ class KuangPlugin(Star):
 
     @filter.regex(r"框")
     async def kuang(self, event: AstrMessageEvent):
-        if not self._is_kuang_trigger(event):
+        if not self._matches_kuang_trigger(event):
             return
         async for result in self._do_kuang(event):
             yield result
@@ -162,23 +163,6 @@ class KuangPlugin(Star):
                     images.append(reply_component)
         return images
 
-    def _is_kuang_trigger(self, event: AstrMessageEvent) -> bool:
-        text_parts: list[str] = []
-        for component in event.get_messages():
-            if isinstance(component, At | Image | Reply):
-                continue
-            text = str(getattr(component, "text", "") or "")
-            if text:
-                text_parts.append(text)
-
-        normalized = self._normalize_trigger_text("".join(text_parts))
-        return normalized == "框"
-
-    @staticmethod
-    def _normalize_trigger_text(text: str) -> str:
-        cleaned = _BIDI_CONTROL_RE.sub("", str(text or ""))
-        return re.sub(r"\s+", "", cleaned)
-
     def _build_avatar_target(self, event: AstrMessageEvent) -> Image | None:
         target_user_id = self._extract_at_target_id(event)
         sender_id = str(event.get_sender_id() or "").strip()
@@ -216,3 +200,8 @@ class KuangPlugin(Star):
                 continue
             return target_id
         return ""
+
+    def _matches_kuang_trigger(self, event: AstrMessageEvent) -> bool:
+        message_str = str(event.get_message_str() or "")
+        sanitized = _BIDI_CONTROL_RE.sub("", message_str).strip()
+        return bool(_KUANG_TRIGGER_RE.search(sanitized))
