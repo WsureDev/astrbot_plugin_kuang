@@ -25,7 +25,7 @@
   },
   "detector_backend": {
     "description": "识别器后端",
-    "hint": "当前仅支持 yolo26n。这个配置项用于后续切换更多识别实现。",
+    "hint": "默认使用 yolo26n。高级用法下也支持 cascade_yolo26n_anime，用于开启二次元补强兜底。",
     "type": "string",
     "default": "yolo26n"
   },
@@ -52,6 +52,60 @@
     "hint": "默认开启。关闭后只保留 YOLO26n 识别到的框，不再补齐到固定数量。",
     "type": "bool",
     "default": true
+  },
+  "enable_anime_fallback": {
+    "description": "启用二次元检测兜底",
+    "hint": "默认关闭。开启后，当 yolo26n 检测数量较少时，会尝试使用动漫头部/人脸 YOLO 模型做第二级补强。",
+    "type": "bool",
+    "default": false
+  },
+  "anime_model_path": {
+    "description": "动漫 YOLO 模型文件路径",
+    "hint": "留空时默认使用插件数据目录下的 models/anime_yolo.onnx。建议放入专门检测二次元头部或人脸的 ONNX 模型。",
+    "type": "string",
+    "default": ""
+  },
+  "anime_model_url": {
+    "description": "动漫 YOLO 模型下载地址",
+    "hint": "仅在开启二次元检测兜底且 anime_auto_download_model 为 true 时使用。未提供默认地址，需手动填写可用的 ONNX 下载链接。",
+    "type": "string",
+    "default": ""
+  },
+  "anime_auto_download_model": {
+    "description": "自动下载动漫 YOLO 模型",
+    "hint": "开启后，若本地缺少动漫模型文件，会尝试从 anime_model_url 下载。",
+    "type": "bool",
+    "default": false
+  },
+  "anime_confidence_threshold": {
+    "description": "动漫 YOLO 识别置信度阈值",
+    "hint": "默认 0.25。用于二次元补强模型，建议按实际模型表现微调。",
+    "type": "float",
+    "default": 0.25
+  },
+  "anime_detector_iou_threshold": {
+    "description": "动漫 YOLO 去重 IoU 阈值",
+    "hint": "默认 0.45。仅影响动漫补强模型内部的去重。",
+    "type": "float",
+    "default": 0.45
+  },
+  "anime_model_input_size": {
+    "description": "动漫 YOLO 输入尺寸",
+    "hint": "默认 640。按你使用的动漫 ONNX 模型输入尺寸调整。",
+    "type": "int",
+    "default": 640
+  },
+  "anime_fallback_trigger_count": {
+    "description": "触发动漫兜底的主检测数量阈值",
+    "hint": "默认 2。主 yolo26n 检测框数量少于这个值时，才会运行动漫补强模型。",
+    "type": "int",
+    "default": 2
+  },
+  "anime_merge_iou_threshold": {
+    "description": "主检测与动漫补强合并 IoU 阈值",
+    "hint": "默认 0.45。值越小越容易去掉主模型与动漫模型之间的重叠框。",
+    "type": "float",
+    "default": 0.45
   },
   "line_width": {
     "description": "白色线框基础线宽",

@@ -40,6 +40,14 @@ class KuangPlugin(Star):
             if configured_model_path
             else str(self.model_dir / "yolo26n.onnx")
         )
+        configured_anime_model_path = str(
+            self.config.get("anime_model_path", "")
+        ).strip()
+        anime_model_path = (
+            configured_anime_model_path
+            if configured_anime_model_path
+            else str(self.model_dir / "anime_yolo.onnx")
+        )
         self.detector = EspBoxDetector(
             box_count=int(self.config.get("box_count", 5)),
             model_path=model_path,
@@ -66,6 +74,29 @@ class KuangPlugin(Star):
                 self.config.get("enable_random_boxes", True)
             ),
             backend_name=str(self.config.get("detector_backend", "yolo26n")).strip(),
+            enable_anime_fallback=bool(
+                self.config.get("enable_anime_fallback", False)
+            ),
+            anime_model_path=anime_model_path,
+            anime_model_url=str(self.config.get("anime_model_url", "")).strip(),
+            anime_auto_download_model=bool(
+                self.config.get("anime_auto_download_model", False)
+            ),
+            anime_confidence_threshold=float(
+                self.config.get("anime_confidence_threshold", 0.25)
+            ),
+            anime_nms_iou_threshold=float(
+                self.config.get("anime_detector_iou_threshold", 0.45)
+            ),
+            anime_model_input_size=int(
+                self.config.get("anime_model_input_size", 640)
+            ),
+            anime_fallback_trigger_count=int(
+                self.config.get("anime_fallback_trigger_count", 2)
+            ),
+            anime_merge_iou_threshold=float(
+                self.config.get("anime_merge_iou_threshold", 0.45)
+            ),
         )
         self.renderer = EspBoxRenderer(
             line_width=int(self.config.get("line_width", 3)),

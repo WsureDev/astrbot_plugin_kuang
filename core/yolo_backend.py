@@ -10,6 +10,7 @@ from .models import DetectionBox
 DEFAULT_YOLO26N_MODEL_URL = (
     "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.onnx"
 )
+DEFAULT_ANIME_YOLO_MODEL_URL = ""
 
 _COCO_CLASS_NAMES = [
     "person",
@@ -108,12 +109,16 @@ _ANIMAL_CLASSES = {
 }
 
 
-class Yolo26nDetectionBackend:
+class BaseYoloOnnxDetectionBackend:
+    source_name = "yolo_onnx"
+    default_model_url = ""
+    class_names: tuple[str, ...] = ()
+
     def __init__(
         self,
         *,
         model_path: str,
-        model_url: str = DEFAULT_YOLO26N_MODEL_URL,
+        model_url: str = "",
         auto_download_model: bool = True,
         confidence_threshold: float = 0.25,
         nms_iou_threshold: float = 0.45,
@@ -121,7 +126,7 @@ class Yolo26nDetectionBackend:
     ) -> None:
         self.model_path = Path(model_path)
         resolved_model_url = str(model_url or "").strip()
-        self.model_url = resolved_model_url or DEFAULT_YOLO26N_MODEL_URL
+        self.model_url = resolved_model_url or self.default_model_url
         self.auto_download_model = bool(auto_download_model)
         self.confidence_threshold = max(0.0, float(confidence_threshold))
         self.nms_iou_threshold = float(nms_iou_threshold)
@@ -174,11 +179,11 @@ class Yolo26nDetectionBackend:
 
         if not self.auto_download_model:
             raise RuntimeError(
-                f"未找到 YOLO26n 模型文件: {self.model_path}. "
+                f"未找到 {self.source_name} 模型文件: {self.model_path}. "
                 "请在配置中指定 model_path，或开启 auto_download_model。"
             )
         if not self.model_url:
-            raise RuntimeError("未配置 YOLO26n 模型下载地址 model_url。")
+            raise RuntimeError(f"未配置 {self.source_name} 模型下载地址 model_url。")
 
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = self.model_path.with_suffix(f"{self.model_path.suffix}.download")
@@ -194,7 +199,7 @@ class Yolo26nDetectionBackend:
             except OSError:
                 pass
             raise RuntimeError(
-                f"YOLO26n 模型下载失败，请检查网络或手动放置模型文件: {exc}"
+                f"{self.source_name} 模型下载失败，请检查网络或手动放置模型文件: {exc}"
             ) from exc
 
         return self.model_path
@@ -211,11 +216,11 @@ class Yolo26nDetectionBackend:
                 providers=["CPUExecutionProvider"],
             )
         except Exception as exc:
-            raise RuntimeError(f"YOLO26n ONNX 模型加载失败: {exc}") from exc
+            raise RuntimeError(f"{self.source_name} ONNX 模型加载失败: {exc}") from exc
 
         input_meta = session.get_inputs()
         if not input_meta:
-            raise RuntimeError("YOLO26n ONNX 模型未暴露输入张量。")
+            raise RuntimeError(f"{self.source_name} ONNX 模型未暴露输入张量。")
 
         self._session = session
         self._input_name = input_meta[0].name
@@ -238,7 +243,7 @@ class Yolo26nDetectionBackend:
         tensor, scale, pad_x, pad_y = self._prepare_input(image_rgb)
         outputs = session.run(None, {self._input_name: tensor})
         if not outputs:
-            raise RuntimeError("YOLO26n ONNX 推理未返回任何输出。")
+            raise RuntimeError(f"{self.source_name} ONNX 推理未返回任何输出。")
         return np.asarray(outputs[0]), scale, pad_x, pad_y
 
     def _prepare_input(self, image_rgb):
@@ -287,7 +292,7 @@ class Yolo26nDetectionBackend:
             predictions = predictions[0]
         if predictions.ndim != 2:
             raise RuntimeError(
-                f"YOLO26n 输出形状不受支持: {tuple(predictions.shape)}"
+                f"{self.source_name} 输出形状不受支持: {tuple(predictions.shape)}"
             )
         if predictions.shape[0] < predictions.shape[1]:
             predictions = predictions.T
@@ -341,25 +346,21 @@ class Yolo26nDetectionBackend:
                     score=float(score),
                     category=label,
                     priority=self._priority_for_label(label),
-                    source="yolo26n",
+                    source=self.source_name,
                 )
             )
 
         return detections
 
-    @staticmethod
-    def _label_for_class_id(class_id: int) -> str:
-        if 0 <= class_id < len(_COCO_CLASS_NAMES):
-            return _COCO_CLASS_NAMES[class_id]
+    def _label_for_class_id(self, class_id: int) -> str:
+        if 0 <= class_id < len(self.class_names):
+            return self.class_names[class_id]
         return f"class_{class_id}"
 
     @staticmethod
     def _priority_for_label(label: str) -> int:
-        if label == "person":
-            return 0
-        if label in _ANIMAL_CLASSES:
-            return 1
-        return 5
+        del label
+        return 0
 
     def _select_recognized_boxes(
         self, candidates: list[DetectionBox]
@@ -398,3 +399,23 @@ class Yolo26nDetectionBackend:
         if union_area <= 0:
             return 0.0
         return inter_area / union_area
+
+
+class Yolo26nDetectionBackend(BaseYoloOnnxDetectionBackend):
+    source_name = "yolo26n"
+    default_model_url = DEFAULT_YOLO26N_MODEL_URL
+    class_names = tuple(_COCO_CLASS_NAMES)
+
+    @staticmethod
+    def _priority_for_label(label: str) -> int:
+        if label == "person":
+            return 0
+        if label in _ANIMAL_CLASSES:
+            return 1
+        return 5
+
+
+class AnimeYoloDetectionBackend(BaseYoloOnnxDetectionBackend):
+    source_name = "anime_yolo"
+    default_model_url = DEFAULT_ANIME_YOLO_MODEL_URL
+    class_names = ("anime_face",)

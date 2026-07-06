@@ -2,14 +2,22 @@ from __future__ import annotations
 
 from typing import Any
 
+from .cascade_backend import CascadeDetectionBackend
 from .detection_backend import DetectionBackend
 from .models import DetectionBox
 from .random_layout import PerspectiveRandomBoxGenerator
-from .yolo_backend import DEFAULT_YOLO26N_MODEL_URL, Yolo26nDetectionBackend
+from .yolo_backend import (
+    DEFAULT_ANIME_YOLO_MODEL_URL,
+    DEFAULT_YOLO26N_MODEL_URL,
+    AnimeYoloDetectionBackend,
+    Yolo26nDetectionBackend,
+)
 
 _DETECTION_BACKENDS = {
     "yolo26n": Yolo26nDetectionBackend,
+    "anime_yolo": AnimeYoloDetectionBackend,
 }
+_CASCADE_YOLO26N_ANIME_BACKEND = "cascade_yolo26n_anime"
 
 
 class EspBoxDetector:
@@ -29,6 +37,15 @@ class EspBoxDetector:
         model_input_size: int = 640,
         enable_random_boxes: bool = True,
         backend_name: str = "yolo26n",
+        enable_anime_fallback: bool = False,
+        anime_model_path: str = "",
+        anime_model_url: str = DEFAULT_ANIME_YOLO_MODEL_URL,
+        anime_auto_download_model: bool = False,
+        anime_confidence_threshold: float = 0.25,
+        anime_nms_iou_threshold: float = 0.45,
+        anime_model_input_size: int = 640,
+        anime_fallback_trigger_count: int = 2,
+        anime_merge_iou_threshold: float = 0.45,
         detection_backend: DetectionBackend | None = None,
     ) -> None:
         self.box_count = max(1, int(box_count))
@@ -41,6 +58,15 @@ class EspBoxDetector:
             confidence_threshold=confidence_threshold,
             nms_iou_threshold=nms_iou_threshold,
             model_input_size=model_input_size,
+            enable_anime_fallback=enable_anime_fallback,
+            anime_model_path=anime_model_path,
+            anime_model_url=anime_model_url,
+            anime_auto_download_model=anime_auto_download_model,
+            anime_confidence_threshold=anime_confidence_threshold,
+            anime_nms_iou_threshold=anime_nms_iou_threshold,
+            anime_model_input_size=anime_model_input_size,
+            anime_fallback_trigger_count=anime_fallback_trigger_count,
+            anime_merge_iou_threshold=anime_merge_iou_threshold,
         )
         self._random_box_generator = PerspectiveRandomBoxGenerator(
             box_count=self.box_count,
@@ -113,11 +139,60 @@ class EspBoxDetector:
         confidence_threshold: float,
         nms_iou_threshold: float,
         model_input_size: int,
+        enable_anime_fallback: bool,
+        anime_model_path: str,
+        anime_model_url: str,
+        anime_auto_download_model: bool,
+        anime_confidence_threshold: float,
+        anime_nms_iou_threshold: float,
+        anime_model_input_size: int,
+        anime_fallback_trigger_count: int,
+        anime_merge_iou_threshold: float,
     ) -> DetectionBackend:
         resolved_backend_name = str(backend_name or "yolo26n").strip().lower()
+        if enable_anime_fallback and resolved_backend_name == "yolo26n":
+            resolved_backend_name = _CASCADE_YOLO26N_ANIME_BACKEND
+
+        if resolved_backend_name == _CASCADE_YOLO26N_ANIME_BACKEND:
+            primary_backend = Yolo26nDetectionBackend(
+                model_path=model_path,
+                model_url=model_url or DEFAULT_YOLO26N_MODEL_URL,
+                auto_download_model=auto_download_model,
+                confidence_threshold=confidence_threshold,
+                nms_iou_threshold=nms_iou_threshold,
+                model_input_size=model_input_size,
+            )
+            secondary_backend = AnimeYoloDetectionBackend(
+                model_path=anime_model_path,
+                model_url=anime_model_url or DEFAULT_ANIME_YOLO_MODEL_URL,
+                auto_download_model=anime_auto_download_model,
+                confidence_threshold=anime_confidence_threshold,
+                nms_iou_threshold=anime_nms_iou_threshold,
+                model_input_size=anime_model_input_size,
+            )
+            return CascadeDetectionBackend(
+                primary_backend=primary_backend,
+                secondary_backend=secondary_backend,
+                fallback_trigger_count=anime_fallback_trigger_count,
+                merge_iou_threshold=anime_merge_iou_threshold,
+                ignore_secondary_errors=True,
+            )
+
+        if resolved_backend_name == "anime_yolo":
+            return AnimeYoloDetectionBackend(
+                model_path=anime_model_path,
+                model_url=anime_model_url or DEFAULT_ANIME_YOLO_MODEL_URL,
+                auto_download_model=anime_auto_download_model,
+                confidence_threshold=anime_confidence_threshold,
+                nms_iou_threshold=anime_nms_iou_threshold,
+                model_input_size=anime_model_input_size,
+            )
+
         backend_cls = _DETECTION_BACKENDS.get(resolved_backend_name)
         if backend_cls is None:
-            supported = ", ".join(sorted(_DETECTION_BACKENDS))
+            supported = ", ".join(
+                sorted((*_DETECTION_BACKENDS.keys(), _CASCADE_YOLO26N_ANIME_BACKEND))
+            )
             raise RuntimeError(
                 f"不支持的识别器后端: {resolved_backend_name}。当前支持: {supported}"
             )
