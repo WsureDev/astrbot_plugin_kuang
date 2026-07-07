@@ -14,7 +14,6 @@ from .core import (
     EspBoxRenderer,
     configure_logger,
     get_logger,
-    set_logger_debug_mode,
 )
 
 _PLUGIN_NAME = "astrbot_plugin_kuang"
@@ -43,11 +42,10 @@ class KuangPlugin(Star):
         self.model_dir.mkdir(parents=True, exist_ok=True)
 
         self.debug_mode = bool(self.config.get("debug_mode", False))
-        set_logger_debug_mode(self.debug_mode)
         if self.debug_mode:
-            _logger.info(
-                f"[{_PLUGIN_NAME}] debug_mode=True，已启用本插件 core logger 的 DEBUG 输出"
-            )
+            import logging as _logging
+            _logging.getLogger().setLevel(_logging.DEBUG)
+            logger.info(f"[{_PLUGIN_NAME}] debug_mode=True，已将根 logger 级别设为 DEBUG")
 
         configured_model_path = str(self.config.get("model_path", "")).strip()
         model_path = (
