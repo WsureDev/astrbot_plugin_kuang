@@ -13,6 +13,7 @@ from .core import (
     EspBoxProcessor,
     EspBoxRenderer,
     configure_logger,
+    get_logger,
     set_logger_debug_mode,
 )
 
@@ -20,6 +21,7 @@ _PLUGIN_NAME = "astrbot_plugin_kuang"
 _DEFAULT_QQ_AVATAR = "https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
 _BIDI_CONTROL_RE = re.compile(r"[\u202A-\u202E\u2066-\u2069]")
 _KUANG_TRIGGER_RE = re.compile(r"^(?:\s|\[At:[^\]]+\])*\s*框\s*(?:\s|\[At:[^\]]+\])*$")
+_logger = get_logger(_PLUGIN_NAME)
 
 
 @register(
@@ -43,7 +45,7 @@ class KuangPlugin(Star):
         self.debug_mode = bool(self.config.get("debug_mode", False))
         set_logger_debug_mode(self.debug_mode)
         if self.debug_mode:
-            logger.info(
+            _logger.info(
                 f"[{_PLUGIN_NAME}] debug_mode=True，已启用本插件 core logger 的 DEBUG 输出"
             )
 
@@ -67,14 +69,13 @@ class KuangPlugin(Star):
         anime_auto_download_model = bool(
             self.config.get("anime_auto_download_model", True)
         )
-        if self.debug_mode:
-            logger.info(
-                f"[{_PLUGIN_NAME}] detector config: backend={detector_backend}, "
-                f"enable_anime_fallback={enable_anime_fallback}, "
-                f"model_path={model_path}, anime_model_path={anime_model_path}, "
-                f"anime_auto_download_model={anime_auto_download_model}, "
-                f"anime_model_url={anime_model_url or '<default>'}"
-            )
+        _logger.debug(
+            f"[{_PLUGIN_NAME}] detector config: backend={detector_backend}, "
+            f"enable_anime_fallback={enable_anime_fallback}, "
+            f"model_path={model_path}, anime_model_path={anime_model_path}, "
+            f"anime_auto_download_model={anime_auto_download_model}, "
+            f"anime_model_url={anime_model_url or '<default>'}"
+        )
         self.detector = EspBoxDetector(
             box_count=int(self.config.get("box_count", 5)),
             model_path=model_path,
@@ -143,11 +144,10 @@ class KuangPlugin(Star):
         reply_images = [] if direct_images else self._collect_reply_images(event)
         image_targets = direct_images or reply_images
         avatar_mode = False
-        if self.debug_mode:
-            logger.info(
-                f"[{_PLUGIN_NAME}] image collection: direct={len(direct_images)}, "
-                f"reply={len(reply_images)}, selected={len(image_targets)}"
-            )
+        _logger.debug(
+            f"[{_PLUGIN_NAME}] image collection: direct={len(direct_images)}, "
+            f"reply={len(reply_images)}, selected={len(image_targets)}"
+        )
 
         if not image_targets:
             avatar_target = self._build_avatar_target(event)
@@ -158,29 +158,26 @@ class KuangPlugin(Star):
                 return
             image_targets = [avatar_target]
             avatar_mode = True
-            if self.debug_mode:
-                logger.info(f"[{_PLUGIN_NAME}] no image found, falling back to avatar mode")
+            _logger.debug(f"[{_PLUGIN_NAME}] no image found, falling back to avatar mode")
 
         output_paths: list[str] = []
         last_error_message = ""
         for image_target in image_targets:
             try:
                 input_path = await image_target.convert_to_file_path()
-                if self.debug_mode:
-                    logger.info(f"[{_PLUGIN_NAME}] processing image target: {input_path}")
+                _logger.debug(f"[{_PLUGIN_NAME}] processing image target: {input_path}")
                 output_path = await asyncio.to_thread(
                     self.processor.render_path,
                     input_path,
                 )
                 event.track_temporary_local_file(output_path)
                 output_paths.append(output_path)
-                if self.debug_mode:
-                    logger.info(
-                        f"[{_PLUGIN_NAME}] processing succeeded: input={input_path}, output={output_path}"
-                    )
+                _logger.debug(
+                    f"[{_PLUGIN_NAME}] processing succeeded: input={input_path}, output={output_path}"
+                )
             except Exception as exc:
                 last_error_message = str(exc).strip()
-                logger.warning(
+                _logger.warning(
                     f"[{_PLUGIN_NAME}] 图片处理失败: {exc}",
                     exc_info=self.debug_mode,
                 )
@@ -194,11 +191,10 @@ class KuangPlugin(Star):
             yield event.plain_result(fallback_message)
             return
 
-        if self.debug_mode:
-            logger.info(
-                f"[{_PLUGIN_NAME}] 完成处理: inputs={len(image_targets)}, "
-                f"outputs={len(output_paths)}, avatar_mode={avatar_mode}"
-            )
+        _logger.debug(
+            f"[{_PLUGIN_NAME}] 完成处理: inputs={len(image_targets)}, "
+            f"outputs={len(output_paths)}, avatar_mode={avatar_mode}"
+        )
 
         for output_path in output_paths:
             yield event.image_result(output_path)
@@ -231,15 +227,13 @@ class KuangPlugin(Star):
             for attr_name in ("avatar", "avatar_url", "face_url", "face"):
                 avatar_value = str(getattr(sender, attr_name, "") or "").strip()
                 if avatar_value.startswith("http://") or avatar_value.startswith("https://"):
-                    if self.debug_mode:
-                        logger.info(
-                            f"[{_PLUGIN_NAME}] avatar target resolved from sender.{attr_name}: {avatar_value}"
-                        )
+                    _logger.debug(
+                        f"[{_PLUGIN_NAME}] avatar target resolved from sender.{attr_name}: {avatar_value}"
+                    )
                     return Image.fromURL(avatar_value)
 
         if not avatar_user_id:
-            if self.debug_mode:
-                logger.info(f"[{_PLUGIN_NAME}] avatar target unavailable: no target_user_id or sender_id")
+            _logger.debug(f"[{_PLUGIN_NAME}] avatar target unavailable: no target_user_id or sender_id")
             return None
 
         template = str(self.config.get("avatar_url_template", "")).strip()
@@ -249,24 +243,21 @@ class KuangPlugin(Star):
                 platform_name=event.get_platform_name(),
                 platform_id=event.get_platform_id(),
             )
-            if self.debug_mode:
-                logger.info(
-                    f"[{_PLUGIN_NAME}] avatar target resolved from template: user_id={avatar_user_id}, url={avatar_url}"
-                )
+            _logger.debug(
+                f"[{_PLUGIN_NAME}] avatar target resolved from template: user_id={avatar_user_id}, url={avatar_url}"
+            )
             return Image.fromURL(avatar_url)
 
         if avatar_user_id.isdigit():
             avatar_url = _DEFAULT_QQ_AVATAR.format(user_id=avatar_user_id)
-            if self.debug_mode:
-                logger.info(
-                    f"[{_PLUGIN_NAME}] avatar target resolved from default QQ avatar: user_id={avatar_user_id}, url={avatar_url}"
-                )
+            _logger.debug(
+                f"[{_PLUGIN_NAME}] avatar target resolved from default QQ avatar: user_id={avatar_user_id}, url={avatar_url}"
+            )
             return Image.fromURL(avatar_url)
 
-        if self.debug_mode:
-            logger.info(
-                f"[{_PLUGIN_NAME}] avatar target unavailable: non-numeric user_id={avatar_user_id!r}"
-            )
+        _logger.debug(
+            f"[{_PLUGIN_NAME}] avatar target unavailable: non-numeric user_id={avatar_user_id!r}"
+        )
         return None
 
     def _extract_at_target_id(self, event: AstrMessageEvent) -> str:
@@ -283,8 +274,7 @@ class KuangPlugin(Star):
         message_str = str(event.get_message_str() or "")
         sanitized = _BIDI_CONTROL_RE.sub("", message_str).strip()
         matched = bool(_KUANG_TRIGGER_RE.search(sanitized))
-        if self.debug_mode:
-            logger.info(
-                f"[{_PLUGIN_NAME}] trigger check: raw={message_str!r}, sanitized={sanitized!r}, matched={matched}"
-            )
+        _logger.debug(
+            f"[{_PLUGIN_NAME}] trigger check: raw={message_str!r}, sanitized={sanitized!r}, matched={matched}"
+        )
         return matched

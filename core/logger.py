@@ -33,6 +33,8 @@ def configure(logger: LoggerProtocol) -> None:
 def set_debug_mode(enabled: bool) -> None:
     global _level_override
     _level_override = logging.DEBUG if enabled else None
+    for cached in _astrbot_named_loggers.values():
+        _sync_logger_level(cached)
 
 
 def _resolve_target_logger(name: str) -> logging.Logger:
