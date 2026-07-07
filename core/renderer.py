@@ -51,26 +51,106 @@ class EspBoxRenderer:
             self.line_width,
             int(round(min(base.size) * 0.0022)),
         )
-        shadow_width = dynamic_width + 2
         outline = (255, 255, 255, self.line_alpha)
         shadow = (0, 0, 0, 255)
+        inner_shadow_width = 1
+        outer_shadow_width = 1
+        inner_shadow_offset = max(1, dynamic_width - 1)
+        outer_shadow_offset = max(1, (dynamic_width // 2) + 1)
 
         _logger.debug(
-            "[renderer] draw_boxes: canvas=%sx%s line_width=%s dynamic_width=%s shadow_width=%s boxes=%s",
+            "[renderer] draw_boxes: canvas=%sx%s line_width=%s dynamic_width=%s inner_shadow_offset=%s outer_shadow_offset=%s boxes=%s",
             base.size[0],
             base.size[1],
             self.line_width,
             dynamic_width,
-            shadow_width,
+            inner_shadow_offset,
+            outer_shadow_offset,
             len(boxes),
         )
         for box in boxes:
             x1, y1, x2, y2 = box.as_tuple()
             _logger.debug("[renderer] drawing box: %s", box.describe())
-            draw.rectangle((x1, y1, x2, y2), outline=shadow, width=shadow_width)
-            draw.rectangle((x1, y1, x2, y2), outline=outline, width=dynamic_width)
+            self._draw_embossed_box(
+                draw,
+                x1=x1,
+                y1=y1,
+                x2=x2,
+                y2=y2,
+                outline=outline,
+                outline_width=dynamic_width,
+                shadow=shadow,
+                inner_shadow_width=inner_shadow_width,
+                outer_shadow_width=outer_shadow_width,
+                inner_shadow_offset=inner_shadow_offset,
+                outer_shadow_offset=outer_shadow_offset,
+            )
 
         return Image.alpha_composite(base, overlay)
+
+    @staticmethod
+    def _draw_embossed_box(
+        draw,
+        *,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        outline,
+        outline_width: int,
+        shadow,
+        inner_shadow_width: int,
+        outer_shadow_width: int,
+        inner_shadow_offset: int,
+        outer_shadow_offset: int,
+    ) -> None:
+        draw.rectangle((x1, y1, x2, y2), outline=outline, width=outline_width)
+
+        # Right/bottom outer shadow: mimic a PS-style embossed drop on the outside.
+        draw.line(
+            (
+                x2 + outer_shadow_offset,
+                y1 + outer_shadow_offset,
+                x2 + outer_shadow_offset,
+                y2 + outer_shadow_offset,
+            ),
+            fill=shadow,
+            width=outer_shadow_width,
+        )
+        draw.line(
+            (
+                x1 + outer_shadow_offset,
+                y2 + outer_shadow_offset,
+                x2 + outer_shadow_offset,
+                y2 + outer_shadow_offset,
+            ),
+            fill=shadow,
+            width=outer_shadow_width,
+        )
+
+        # Left/top inner shadow: carve the inside edge for the embossed look.
+        inner_left_x = min(x2, x1 + inner_shadow_offset)
+        inner_top_y = min(y2, y1 + inner_shadow_offset)
+        draw.line(
+            (
+                inner_left_x,
+                y1 + inner_shadow_offset,
+                inner_left_x,
+                max(y1 + inner_shadow_offset, y2 - inner_shadow_offset),
+            ),
+            fill=shadow,
+            width=inner_shadow_width,
+        )
+        draw.line(
+            (
+                x1 + inner_shadow_offset,
+                inner_top_y,
+                max(x1 + inner_shadow_offset, x2 - inner_shadow_offset),
+                inner_top_y,
+            ),
+            fill=shadow,
+            width=inner_shadow_width,
+        )
 
     def save_gif(
         self,
