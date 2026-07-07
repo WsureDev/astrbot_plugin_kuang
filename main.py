@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
 
 from astrbot.api import logger
@@ -44,11 +43,8 @@ class KuangPlugin(Star):
         self.debug_mode = bool(self.config.get("debug_mode", False))
         set_logger_debug_mode(self.debug_mode)
         if self.debug_mode:
-            logging.getLogger().setLevel(logging.DEBUG)
-            logger.setLevel(logging.DEBUG)
-            logging.getLogger("astrbot").setLevel(logging.DEBUG)
             logger.info(
-                f"[{_PLUGIN_NAME}] debug_mode=True，已将 root/astrbot/core logger 级别设为 DEBUG"
+                f"[{_PLUGIN_NAME}] debug_mode=True，已启用本插件 core logger 的 DEBUG 输出"
             )
 
         configured_model_path = str(self.config.get("model_path", "")).strip()
