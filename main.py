@@ -9,7 +9,13 @@ from astrbot.api.all import At, Image, Reply
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 
-from .core import EspBoxDetector, EspBoxProcessor, EspBoxRenderer, configure_logger
+from .core import (
+    EspBoxDetector,
+    EspBoxProcessor,
+    EspBoxRenderer,
+    configure_logger,
+    set_logger_debug_mode,
+)
 
 _PLUGIN_NAME = "astrbot_plugin_kuang"
 _DEFAULT_QQ_AVATAR = "https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
@@ -36,9 +42,14 @@ class KuangPlugin(Star):
         self.model_dir.mkdir(parents=True, exist_ok=True)
 
         self.debug_mode = bool(self.config.get("debug_mode", False))
+        set_logger_debug_mode(self.debug_mode)
         if self.debug_mode:
             logging.getLogger().setLevel(logging.DEBUG)
-            logger.info(f"[{_PLUGIN_NAME}] debug_mode=True，已将根 logger 级别设为 DEBUG")
+            logger.setLevel(logging.DEBUG)
+            logging.getLogger("astrbot").setLevel(logging.DEBUG)
+            logger.info(
+                f"[{_PLUGIN_NAME}] debug_mode=True，已将 root/astrbot/core logger 级别设为 DEBUG"
+            )
 
         configured_model_path = str(self.config.get("model_path", "")).strip()
         model_path = (
