@@ -129,16 +129,25 @@ class DetectionArranger:
         )
         selected: list[DetectionBox] = []
         for candidate in sorted(candidates, key=self._selection_sort_key):
-            conflict = self._find_conflict(candidate, selected)
-            if conflict is not None:
+            blocked_by, replacement_indexes = self._resolve_conflicts(candidate, selected)
+            if blocked_by is not None:
                 _logger.debug(
                     "[arranger] drop candidate because of conflict: candidate=%s conflict=%s iou=%.3f containment=%.3f",
                     candidate.describe(),
-                    conflict.describe(),
-                    candidate.iou(conflict),
-                    candidate.containment_ratio(conflict),
+                    blocked_by.describe(),
+                    candidate.iou(blocked_by),
+                    candidate.containment_ratio(blocked_by),
                 )
                 continue
+            if replacement_indexes:
+                removed = [selected[index].describe() for index in replacement_indexes]
+                for index in sorted(replacement_indexes, reverse=True):
+                    selected.pop(index)
+                _logger.debug(
+                    "[arranger] replace selected with candidate: candidate=%s removed=%s",
+                    candidate.describe(),
+                    removed,
+                )
             selected.append(candidate)
             _logger.debug("[arranger] accept candidate: %s", candidate.describe())
             if len(selected) >= self.box_count:
@@ -190,19 +199,59 @@ class DetectionArranger:
             )
         return candidates
 
-    def _find_conflict(
+    def _resolve_conflicts(
         self,
         candidate: DetectionBox,
         selected: list[DetectionBox],
-    ) -> DetectionBox | None:
-        for other in selected:
-            if not candidate.overlaps(other):
+    ) -> tuple[DetectionBox | None, list[int]]:
+        replacement_indexes: list[int] = []
+        for index, other in enumerate(selected):
+            decision = self._decide_conflict_action(candidate, other)
+            if decision == "keep_both":
                 continue
-            if self._is_conflicting(candidate, other):
-                return other
-        return None
+            if decision == "replace_selected":
+                replacement_indexes.append(index)
+                continue
+            return other, []
+        return None, replacement_indexes
 
-    def _is_conflicting(self, candidate: DetectionBox, other: DetectionBox) -> bool:
+    def _decide_conflict_action(
+        self,
+        candidate: DetectionBox,
+        other: DetectionBox,
+    ) -> str:
+        if not candidate.overlaps(other):
+            return "keep_both"
+        if not self._has_arrangement_conflict(candidate, other):
+            return "keep_both"
+
+        if self._is_stage2_humanoid(candidate) and self._is_stage1_person(other):
+            if not self._is_same_target_pair(candidate, other):
+                return "keep_both"
+            if self._should_stage2_replace_stage1(candidate, other):
+                return "replace_selected"
+            return "drop_candidate"
+
+        if self._is_stage1_person(candidate) and self._is_stage2_humanoid(other):
+            if not self._is_same_target_pair(candidate, other):
+                return "keep_both"
+            return "replace_selected"
+
+        if (
+            self._semantic_family(candidate) == "humanoid"
+            and self._semantic_family(other) == "humanoid"
+        ):
+            if not self._is_same_target_pair(candidate, other):
+                return "keep_both"
+            return "drop_candidate"
+
+        return "drop_candidate"
+
+    def _has_arrangement_conflict(
+        self,
+        candidate: DetectionBox,
+        other: DetectionBox,
+    ) -> bool:
         iou = candidate.iou(other)
         containment = candidate.containment_ratio(other)
         if iou >= self.overlap_iou_threshold:
@@ -212,10 +261,52 @@ class DetectionArranger:
         if (
             self._semantic_family(candidate) == "humanoid"
             and self._semantic_family(other) == "humanoid"
-            and containment >= self.humanoid_containment_threshold
+            and self._smaller_overlap_ratio(candidate, other)
+            >= self.humanoid_containment_threshold
         ):
             return True
         return False
+
+    def _is_same_target_pair(
+        self,
+        candidate: DetectionBox,
+        other: DetectionBox,
+    ) -> bool:
+        if (
+            self._semantic_family(candidate) != "humanoid"
+            or self._semantic_family(other) != "humanoid"
+        ):
+            return False
+        if (
+            self._smaller_overlap_ratio(candidate, other)
+            < self.humanoid_containment_threshold
+        ):
+            return False
+        if self._center_offset_ratio(candidate, other) > 0.72:
+            return False
+        if not self._role_alignment_ok(candidate, other):
+            return False
+        return True
+
+    def _should_stage2_replace_stage1(
+        self,
+        stage2_box: DetectionBox,
+        stage1_box: DetectionBox,
+    ) -> bool:
+        if stage1_box.area >= stage2_box.area:
+            return False
+        if not stage2_box.composite:
+            return False
+        if stage2_box.semantic_role not in {"anime_full_body", "anime_upper_body"}:
+            return False
+        if (
+            self._smaller_overlap_ratio(stage2_box, stage1_box)
+            < self.containment_threshold
+        ):
+            return False
+        if self._center_offset_ratio(stage2_box, stage1_box) > 0.45:
+            return False
+        return True
 
     def _pick_best_head_index(
         self,
@@ -326,6 +417,55 @@ class DetectionArranger:
         if box.category == "random":
             return "random"
         return "other"
+
+    @staticmethod
+    def _smaller_overlap_ratio(left: DetectionBox, right: DetectionBox) -> float:
+        smaller_area = min(left.area, right.area)
+        if smaller_area <= 0:
+            return 0.0
+        return left.intersection_area(right) / smaller_area
+
+    @staticmethod
+    def _center_offset_ratio(left: DetectionBox, right: DetectionBox) -> float:
+        reference_width = max(1.0, max(left.width, right.width))
+        return abs(left.center_x - right.center_x) / reference_width
+
+    def _role_alignment_ok(
+        self,
+        left: DetectionBox,
+        right: DetectionBox,
+    ) -> bool:
+        return (
+            self._single_role_alignment_ok(left, right)
+            and self._single_role_alignment_ok(right, left)
+        )
+
+    def _single_role_alignment_ok(
+        self,
+        part_box: DetectionBox,
+        other: DetectionBox,
+    ) -> bool:
+        role = part_box.semantic_role
+        if role == "anime_head":
+            return part_box.center_y <= other.y1 + (other.height * 0.68)
+        if role == "anime_legs":
+            return part_box.center_y >= other.y1 + (other.height * 0.32)
+        if role == "anime_torso":
+            return (
+                part_box.center_y >= other.y1 + (other.height * 0.18)
+                and part_box.center_y <= other.y1 + (other.height * 0.82)
+            )
+        return True
+
+    @staticmethod
+    def _is_stage1_person(box: DetectionBox) -> bool:
+        return box.stage == "stage1_primary" and box.semantic_role == "person_full"
+
+    @staticmethod
+    def _is_stage2_humanoid(box: DetectionBox) -> bool:
+        return box.stage in {"stage2_anime", "stage2_composite"} and (
+            box.semantic_role in _HUMANOID_ROLES
+        )
 
     @staticmethod
     def _selection_sort_key(box: DetectionBox) -> tuple[int, int, float]:
