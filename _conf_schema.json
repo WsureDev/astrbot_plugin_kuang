@@ -55,13 +55,13 @@
   },
   "enable_anime_fallback": {
     "description": "启用二次元检测兜底",
-    "hint": "默认关闭。开启后，当 yolo26n 检测数量较少时，会尝试使用动漫头部/人脸 YOLO 模型做第二级补强。",
+    "hint": "默认关闭。开启后，当 yolo26n 的人形检测结果较少时，会尝试使用动漫部位 YOLO 模型做第二级补强。",
     "type": "bool",
     "default": false
   },
   "anime_model_path": {
     "description": "动漫 YOLO 模型文件路径",
-    "hint": "留空时默认使用插件数据目录下的 models/anime_yolo.onnx。建议放入专门检测二次元头部或人脸的 ONNX 模型。",
+    "hint": "留空时默认使用插件数据目录下的 models/anime_yolo.onnx。当前默认模型是二次元部位检测，类别为 Head / Torso / Legs。",
     "type": "string",
     "default": ""
   },
@@ -79,7 +79,7 @@
   },
   "anime_confidence_threshold": {
     "description": "动漫 YOLO 识别置信度阈值",
-    "hint": "默认 0.25。用于二次元补强模型，建议按实际模型表现微调。",
+    "hint": "默认 0.25。用于 Head / Torso / Legs 二次元补强模型，建议按实际模型表现微调。",
     "type": "float",
     "default": 0.25
   },
@@ -97,7 +97,7 @@
   },
   "anime_fallback_trigger_count": {
     "description": "触发动漫兜底的主检测数量阈值",
-    "hint": "默认 2。主 yolo26n 检测框数量少于这个值时，才会运行动漫补强模型。",
+    "hint": "默认 2。主 yolo26n 的 person 检测数量少于这个值时，才会运行动漫补强模型。",
     "type": "int",
     "default": 2
   },
@@ -151,7 +151,7 @@
   },
   "debug_mode": {
     "description": "输出调试日志",
-    "hint": "开启后会记录 YOLO26n 识别结果、随机补框数量和头像回退逻辑。",
+    "hint": "开启后会记录 stage1 主检测、stage2 anime 部位检测、stage2_composite 合成框、随机补框和最终编排逻辑。",
     "type": "bool",
     "default": false
   }

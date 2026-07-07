@@ -167,6 +167,12 @@ class BaseYoloOnnxDetectionBackend:
             pad_x=pad_x,
             pad_y=pad_y,
         )
+        _logger.debug(
+            "[%s] decoded candidates=%s details=%s",
+            self.source_name,
+            len(detections),
+            self._summarize_detections(detections),
+        )
         selected = self._select_recognized_boxes(detections)
         _logger.debug(
             "[%s] detect: image=%sx%s raw_candidates=%s selected=%s",
@@ -529,44 +535,44 @@ class BaseYoloOnnxDetectionBackend:
         for candidate in ordered:
             if candidate.area <= 0:
                 continue
-            if any(
-                self._iou(candidate, other) >= self.nms_iou_threshold
-                for other in selected
-            ):
+            conflict = self._find_suppressed_by(candidate, selected)
+            if conflict is not None:
+                _logger.debug(
+                    "[%s] suppress candidate: candidate=%s conflict=%s iou=%.3f containment=%.3f threshold=%.3f",
+                    self.source_name,
+                    candidate.describe(),
+                    conflict.describe(),
+                    candidate.iou(conflict),
+                    candidate.containment_ratio(conflict),
+                    self.nms_iou_threshold,
+                )
                 continue
             selected.append(candidate)
         return selected
+
+    def _find_suppressed_by(
+        self,
+        candidate: DetectionBox,
+        selected: list[DetectionBox],
+    ) -> DetectionBox | None:
+        for other in selected:
+            if not self._same_suppression_group(candidate, other):
+                continue
+            if candidate.iou(other) >= self.nms_iou_threshold:
+                return other
+            if candidate.containment_ratio(other) >= 0.78:
+                return other
+        return None
+
+    @staticmethod
+    def _same_suppression_group(left: DetectionBox, right: DetectionBox) -> bool:
+        return left.category == right.category
 
     @staticmethod
     def _summarize_detections(detections: list[DetectionBox]) -> str:
         if not detections:
             return "<none>"
-        return ", ".join(
-            (
-                f"{item.category}"
-                f"@{item.score:.2f}"
-                f"[{item.x1},{item.y1},{item.x2},{item.y2}]"
-            )
-            for item in detections
-        )
-
-    @staticmethod
-    def _iou(left: DetectionBox, right: DetectionBox) -> float:
-        inter_x1 = max(left.x1, right.x1)
-        inter_y1 = max(left.y1, right.y1)
-        inter_x2 = min(left.x2, right.x2)
-        inter_y2 = min(left.y2, right.y2)
-
-        inter_width = max(0, inter_x2 - inter_x1)
-        inter_height = max(0, inter_y2 - inter_y1)
-        if inter_width == 0 or inter_height == 0:
-            return 0.0
-
-        inter_area = inter_width * inter_height
-        union_area = left.area + right.area - inter_area
-        if union_area <= 0:
-            return 0.0
-        return inter_area / union_area
+        return ", ".join(item.describe() for item in detections)
 
 
 class Yolo26nDetectionBackend(BaseYoloOnnxDetectionBackend):
@@ -586,4 +592,14 @@ class Yolo26nDetectionBackend(BaseYoloOnnxDetectionBackend):
 class AnimeYoloDetectionBackend(BaseYoloOnnxDetectionBackend):
     source_name = "anime_yolo"
     default_model_url = DEFAULT_ANIME_YOLO_MODEL_URL
-    class_names = ("anime_face",)
+    class_names = ("Head", "Torso", "Legs")
+
+    @staticmethod
+    def _priority_for_label(label: str) -> int:
+        if label == "Torso":
+            return 0
+        if label == "Head":
+            return 1
+        if label == "Legs":
+            return 2
+        return 5

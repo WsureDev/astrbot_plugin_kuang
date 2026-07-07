@@ -1,0 +1,352 @@
+from __future__ import annotations
+
+from .logger import get_logger
+from .models import DetectionBox
+
+_logger = get_logger(__name__)
+_ANIME_HEAD = "Head"
+_ANIME_TORSO = "Torso"
+_ANIME_LEGS = "Legs"
+_HUMANOID_ROLES = {
+    "person_full",
+    "anime_full_body",
+    "anime_upper_body",
+    "anime_torso",
+    "anime_head",
+    "anime_legs",
+}
+_ANIMAL_CATEGORIES = {
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+}
+
+
+class DetectionArranger:
+    def __init__(
+        self,
+        *,
+        box_count: int,
+        overlap_iou_threshold: float = 0.55,
+        containment_threshold: float = 0.72,
+        humanoid_containment_threshold: float = 0.55,
+    ) -> None:
+        self.box_count = max(1, int(box_count))
+        self.overlap_iou_threshold = max(0.0, float(overlap_iou_threshold))
+        self.containment_threshold = max(0.0, float(containment_threshold))
+        self.humanoid_containment_threshold = max(
+            0.0,
+            float(humanoid_containment_threshold),
+        )
+
+    def compose_anime_boxes(
+        self,
+        boxes: list[DetectionBox],
+    ) -> list[DetectionBox]:
+        heads = [item for item in boxes if item.category == _ANIME_HEAD]
+        torsos = [item for item in boxes if item.category == _ANIME_TORSO]
+        legs = [item for item in boxes if item.category == _ANIME_LEGS]
+        used_heads: set[int] = set()
+        used_legs: set[int] = set()
+        composites: list[DetectionBox] = []
+        _logger.debug(
+            "[arranger] compose anime start: heads=%s torsos=%s legs=%s",
+            len(heads),
+            len(torsos),
+            len(legs),
+        )
+        for torso in sorted(torsos, key=self._selection_sort_key):
+            head_index = self._pick_best_head_index(torso, heads, used_heads)
+            leg_index = self._pick_best_leg_index(torso, legs, used_legs)
+            parts = [torso]
+            part_names = ["torso"]
+            if head_index is not None:
+                parts.append(heads[head_index])
+                part_names.insert(0, "head")
+                used_heads.add(head_index)
+            if leg_index is not None:
+                parts.append(legs[leg_index])
+                part_names.append("legs")
+                used_legs.add(leg_index)
+            if len(parts) == 1:
+                continue
+
+            union_box = torso.union(*parts[1:]).clone(
+                source="anime_yolo_composite",
+                category="+".join(part_names),
+                stage="stage2_composite",
+                part="+".join(part_names),
+                semantic_role=(
+                    "anime_full_body"
+                    if "head" in part_names and "legs" in part_names
+                    else "anime_upper_body"
+                ),
+                priority=(
+                    1
+                    if "head" in part_names and "legs" in part_names
+                    else 2
+                ),
+                composite=True,
+            )
+            composites.append(union_box)
+            _logger.debug(
+                "[arranger] anime composite built: torso=%s head=%s legs=%s composite=%s",
+                torso.describe(),
+                heads[head_index].describe() if head_index is not None else "<none>",
+                legs[leg_index].describe() if leg_index is not None else "<none>",
+                union_box.describe(),
+            )
+        _logger.debug(
+            "[arranger] compose anime done: composites=%s details=%s",
+            len(composites),
+            self._summarize(composites),
+        )
+        return composites
+
+    def arrange(
+        self,
+        *,
+        stage1_boxes: list[DetectionBox],
+        stage2_boxes: list[DetectionBox],
+        stage2_composite_boxes: list[DetectionBox],
+    ) -> list[DetectionBox]:
+        candidates = self._build_candidates(
+            stage1_boxes=stage1_boxes,
+            stage2_boxes=stage2_boxes,
+            stage2_composite_boxes=stage2_composite_boxes,
+        )
+        _logger.debug(
+            "[arranger] arrange start: candidates=%s details=%s",
+            len(candidates),
+            self._summarize(candidates),
+        )
+        selected: list[DetectionBox] = []
+        for candidate in sorted(candidates, key=self._selection_sort_key):
+            conflict = self._find_conflict(candidate, selected)
+            if conflict is not None:
+                _logger.debug(
+                    "[arranger] drop candidate because of conflict: candidate=%s conflict=%s iou=%.3f containment=%.3f",
+                    candidate.describe(),
+                    conflict.describe(),
+                    candidate.iou(conflict),
+                    candidate.containment_ratio(conflict),
+                )
+                continue
+            selected.append(candidate)
+            _logger.debug("[arranger] accept candidate: %s", candidate.describe())
+            if len(selected) >= self.box_count:
+                break
+        _logger.debug(
+            "[arranger] arrange done: selected=%s details=%s",
+            len(selected),
+            self._summarize(selected),
+        )
+        return selected
+
+    def _build_candidates(
+        self,
+        *,
+        stage1_boxes: list[DetectionBox],
+        stage2_boxes: list[DetectionBox],
+        stage2_composite_boxes: list[DetectionBox],
+    ) -> list[DetectionBox]:
+        candidates: list[DetectionBox] = []
+        for item in stage1_boxes:
+            semantic_role = item.semantic_role or self._semantic_role_for_stage1(item)
+            candidates.append(
+                item.clone(
+                    stage=item.stage or "stage1_primary",
+                    semantic_role=semantic_role,
+                    part=item.part or item.category.lower(),
+                    priority=self._arrangement_priority_for_role(semantic_role),
+                )
+            )
+        for item in stage2_composite_boxes:
+            semantic_role = item.semantic_role or "anime_upper_body"
+            candidates.append(
+                item.clone(
+                    stage=item.stage or "stage2_composite",
+                    semantic_role=semantic_role,
+                    part=item.part or "torso",
+                    priority=self._arrangement_priority_for_role(semantic_role),
+                )
+            )
+        for item in stage2_boxes:
+            semantic_role = item.semantic_role or self._semantic_role_for_stage2(item)
+            candidates.append(
+                item.clone(
+                    stage=item.stage or "stage2_anime",
+                    semantic_role=semantic_role,
+                    part=item.part or item.category.lower(),
+                    priority=self._arrangement_priority_for_role(semantic_role),
+                )
+            )
+        return candidates
+
+    def _find_conflict(
+        self,
+        candidate: DetectionBox,
+        selected: list[DetectionBox],
+    ) -> DetectionBox | None:
+        for other in selected:
+            if not candidate.overlaps(other):
+                continue
+            if self._is_conflicting(candidate, other):
+                return other
+        return None
+
+    def _is_conflicting(self, candidate: DetectionBox, other: DetectionBox) -> bool:
+        iou = candidate.iou(other)
+        containment = candidate.containment_ratio(other)
+        if iou >= self.overlap_iou_threshold:
+            return True
+        if containment >= self.containment_threshold:
+            return True
+        if (
+            self._semantic_family(candidate) == "humanoid"
+            and self._semantic_family(other) == "humanoid"
+            and containment >= self.humanoid_containment_threshold
+        ):
+            return True
+        return False
+
+    def _pick_best_head_index(
+        self,
+        torso: DetectionBox,
+        heads: list[DetectionBox],
+        used_heads: set[int],
+    ) -> int | None:
+        return self._pick_best_part_index(
+            anchor=torso,
+            parts=heads,
+            used_indices=used_heads,
+            part_name="head",
+        )
+
+    def _pick_best_leg_index(
+        self,
+        torso: DetectionBox,
+        legs: list[DetectionBox],
+        used_legs: set[int],
+    ) -> int | None:
+        return self._pick_best_part_index(
+            anchor=torso,
+            parts=legs,
+            used_indices=used_legs,
+            part_name="legs",
+        )
+
+    def _pick_best_part_index(
+        self,
+        *,
+        anchor: DetectionBox,
+        parts: list[DetectionBox],
+        used_indices: set[int],
+        part_name: str,
+    ) -> int | None:
+        best_index: int | None = None
+        best_score = float("-inf")
+        for index, part in enumerate(parts):
+            if index in used_indices:
+                continue
+            score = self._part_alignment_score(anchor, part, part_name)
+            if score <= 0:
+                continue
+            if score > best_score:
+                best_score = score
+                best_index = index
+        return best_index
+
+    def _part_alignment_score(
+        self,
+        anchor: DetectionBox,
+        part: DetectionBox,
+        part_name: str,
+    ) -> float:
+        center_offset_ratio = abs(anchor.center_x - part.center_x) / max(
+            1.0,
+            max(anchor.width, part.width),
+        )
+        horizontal_overlap = max(0, min(anchor.x2, part.x2) - max(anchor.x1, part.x1))
+        horizontal_overlap_ratio = horizontal_overlap / max(1.0, min(anchor.width, part.width))
+        if center_offset_ratio > 0.95:
+            return 0.0
+
+        if part_name == "head":
+            if part.center_y > anchor.center_y:
+                return 0.0
+            if part.y2 > anchor.y1 + int(anchor.height * 0.75):
+                return 0.0
+            vertical_gap = max(0, anchor.y1 - part.y2)
+        else:
+            if part.center_y < anchor.center_y:
+                return 0.0
+            if part.y1 < anchor.y1 + int(anchor.height * 0.15):
+                return 0.0
+            vertical_gap = max(0, part.y1 - anchor.y2)
+
+        return (
+            (horizontal_overlap_ratio * 3.0)
+            + max(0.0, 1.1 - center_offset_ratio)
+            + max(0.0, 1.0 - (vertical_gap / max(1.0, anchor.height)))
+            + (part.score * 0.2)
+        )
+
+    @staticmethod
+    def _semantic_role_for_stage1(box: DetectionBox) -> str:
+        if box.category == "person":
+            return "person_full"
+        if box.category in _ANIMAL_CATEGORIES:
+            return "animal"
+        return "other"
+
+    @staticmethod
+    def _semantic_role_for_stage2(box: DetectionBox) -> str:
+        if box.category == _ANIME_TORSO:
+            return "anime_torso"
+        if box.category == _ANIME_HEAD:
+            return "anime_head"
+        if box.category == _ANIME_LEGS:
+            return "anime_legs"
+        return "other"
+
+    @staticmethod
+    def _semantic_family(box: DetectionBox) -> str:
+        if box.semantic_role in _HUMANOID_ROLES:
+            return "humanoid"
+        if box.semantic_role == "animal" or box.category in _ANIMAL_CATEGORIES:
+            return "animal"
+        if box.category == "random":
+            return "random"
+        return "other"
+
+    @staticmethod
+    def _selection_sort_key(box: DetectionBox) -> tuple[int, int, float]:
+        return (box.priority, -int(round(box.score * 1000)), -float(box.area))
+
+    @staticmethod
+    def _arrangement_priority_for_role(role: str) -> int:
+        order = {
+            "person_full": 0,
+            "anime_full_body": 1,
+            "anime_upper_body": 2,
+            "anime_torso": 3,
+            "anime_head": 4,
+            "anime_legs": 5,
+            "animal": 6,
+            "other": 7,
+        }
+        return order.get(role, 7)
+
+    @staticmethod
+    def _summarize(boxes: list[DetectionBox]) -> str:
+        if not boxes:
+            return "<none>"
+        return ", ".join(item.describe() for item in boxes)

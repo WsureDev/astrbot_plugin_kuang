@@ -51,20 +51,23 @@ class EspBoxRenderer:
             self.line_width,
             int(round(min(base.size) * 0.0022)),
         )
+        shadow_width = dynamic_width + 2
         outline = (255, 255, 255, self.line_alpha)
         shadow = (0, 0, 0, 255)
 
         _logger.debug(
-            "[renderer] draw_boxes: canvas=%sx%s line_width=%s dynamic_width=%s boxes=%s",
+            "[renderer] draw_boxes: canvas=%sx%s line_width=%s dynamic_width=%s shadow_width=%s boxes=%s",
             base.size[0],
             base.size[1],
             self.line_width,
             dynamic_width,
+            shadow_width,
             len(boxes),
         )
         for box in boxes:
             x1, y1, x2, y2 = box.as_tuple()
-            draw.rectangle((x1 + 1, y1 + 1, x2 + 1, y2 + 1), outline=shadow, width=1)
+            _logger.debug("[renderer] drawing box: %s", box.describe())
+            draw.rectangle((x1, y1, x2, y2), outline=shadow, width=shadow_width)
             draw.rectangle((x1, y1, x2, y2), outline=outline, width=dynamic_width)
 
         return Image.alpha_composite(base, overlay)

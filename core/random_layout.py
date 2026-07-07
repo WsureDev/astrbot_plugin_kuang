@@ -3,7 +3,10 @@ from __future__ import annotations
 import random
 from typing import Any
 
+from .logger import get_logger
 from .models import DetectionBox
+
+_logger = get_logger(__name__)
 
 
 class PerspectiveRandomBoxGenerator:
@@ -67,6 +70,8 @@ class PerspectiveRandomBoxGenerator:
 
         generated: list[DetectionBox] = []
         max_attempts = max(80, missing_count * 80)
+        empty_candidates = 0
+        overlap_rejections = 0
         for _ in range(max_attempts):
             if len(generated) >= missing_count:
                 break
@@ -78,10 +83,12 @@ class PerspectiveRandomBoxGenerator:
                 scene,
             )
             if candidate is None:
+                empty_candidates += 1
                 continue
 
             all_boxes = existing_boxes + generated
             if any(self._overlaps(candidate, other) for other in all_boxes):
+                overlap_rejections += 1
                 continue
 
             generated.append(candidate)
@@ -97,6 +104,16 @@ class PerspectiveRandomBoxGenerator:
                     scene,
                 )
             )
+        _logger.debug(
+            "[random_layout] generate_missing_boxes: target=%s produced=%s attempts=%s empty_candidates=%s overlap_rejections=%s existing=%s details=%s",
+            missing_count,
+            len(generated),
+            max_attempts,
+            empty_candidates,
+            overlap_rejections,
+            len(existing_boxes),
+            self._summarize_boxes(generated),
+        )
         return generated
 
     @staticmethod
@@ -429,7 +446,10 @@ class PerspectiveRandomBoxGenerator:
 
     @staticmethod
     def _overlaps(left: DetectionBox, right: DetectionBox) -> bool:
-        return (
-            max(left.x1, right.x1) < min(left.x2, right.x2)
-            and max(left.y1, right.y1) < min(left.y2, right.y2)
-        )
+        return left.overlaps(right)
+
+    @staticmethod
+    def _summarize_boxes(boxes: list[DetectionBox]) -> str:
+        if not boxes:
+            return "<none>"
+        return ", ".join(item.describe() for item in boxes)

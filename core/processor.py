@@ -34,9 +34,21 @@ class EspBoxProcessor:
                 _logger.info("[processor] GIF detected, switching to frame-by-frame render")
                 return self._render_gif(image_path)
 
-        boxes = self.detector.detect_from_path(image_path)
-        _logger.debug("[processor] detector returned %s boxes", len(boxes))
-        output_path = self.renderer.render(image_path, boxes, str(self.output_dir))
+        detection_result = self.detector.analyze_from_path(image_path)
+        _logger.debug(
+            "[processor] detector pipeline: stage1=%s stage2=%s stage2_composite=%s arranged=%s random=%s final=%s",
+            len(detection_result.stage1_boxes),
+            len(detection_result.stage2_boxes),
+            len(detection_result.stage2_composite_boxes),
+            len(detection_result.arranged_boxes),
+            len(detection_result.random_boxes),
+            len(detection_result.final_boxes),
+        )
+        output_path = self.renderer.render(
+            image_path,
+            detection_result.final_boxes,
+            str(self.output_dir),
+        )
         _logger.debug("[processor] render_path done: output=%s", output_path)
         return output_path
 
@@ -60,14 +72,21 @@ class EspBoxProcessor:
                 duration = int(frame.info.get("duration", base_duration) or base_duration)
                 rgba_frame = frame.convert("RGBA")
                 rgb_frame = rgba_frame.convert("RGB")
-                current_boxes = self.detector.detect(np.asarray(rgb_frame))
+                detection_result = self.detector.analyze(np.asarray(rgb_frame))
                 _logger.debug(
-                    "[processor] GIF frame=%s duration=%sms boxes=%s",
+                    "[processor] GIF frame=%s duration=%sms stage1=%s stage2=%s stage2_composite=%s arranged=%s random=%s final=%s",
                     frame_index,
                     duration,
-                    len(current_boxes),
+                    len(detection_result.stage1_boxes),
+                    len(detection_result.stage2_boxes),
+                    len(detection_result.stage2_composite_boxes),
+                    len(detection_result.arranged_boxes),
+                    len(detection_result.random_boxes),
+                    len(detection_result.final_boxes),
                 )
-                rendered_frames.append(self.renderer.draw_boxes(rgba_frame, current_boxes))
+                rendered_frames.append(
+                    self.renderer.draw_boxes(rgba_frame, detection_result.final_boxes)
+                )
                 durations.append(max(20, duration))
 
         if not rendered_frames:
