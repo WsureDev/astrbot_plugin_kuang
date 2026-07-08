@@ -205,10 +205,19 @@ class DetectionArranger:
 
         candidates: list[DetectionBox] = []
         for item in stage1_boxes:
-            semantic_role = item.semantic_role or self._semantic_role_for_stage1(
-                item,
-                stage2_humanoid_hints,
-            )
+            semantic_role = item.semantic_role
+            if semantic_role in {"", "other"}:
+                semantic_role = self._semantic_role_for_stage1(
+                    item,
+                    stage2_humanoid_hints,
+                )
+            if semantic_role != item.semantic_role:
+                _logger.debug(
+                    "[arranger] recomputed stage1 semantic role: before=%s after=%s box=%s",
+                    item.semantic_role or "<empty>",
+                    semantic_role,
+                    item.describe(),
+                )
             candidates.append(
                 item.clone(
                     stage=item.stage or "stage1_primary",
