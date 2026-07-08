@@ -16,6 +16,7 @@ from .core import (
     ensure_onnx_from_pt,
     get_logger,
 )
+from .core.yolo_backend import DEFAULT_BOORU_YOLO_PT_URL
 
 _PLUGIN_NAME = "astrbot_plugin_kuang"
 _DEFAULT_QQ_AVATAR = "https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
@@ -83,7 +84,11 @@ class KuangPlugin(Star):
             if configured_booru_model_path
             else str(self.model_dir / "booru_yolo.onnx")
         )
-        booru_pt_url = str(self.config.get("booru_pt_url", "")).strip()
+        booru_pt_url = str(
+            self.config.get("booru_pt_url", DEFAULT_BOORU_YOLO_PT_URL)
+        ).strip()
+        if not booru_pt_url:
+            booru_pt_url = DEFAULT_BOORU_YOLO_PT_URL
         booru_auto_download_model = bool(
             self.config.get("booru_auto_download_model", True)
         )
@@ -161,8 +166,6 @@ class KuangPlugin(Star):
                 self.config.get("anime_merge_iou_threshold", 0.45)
             ),
             booru_model_path=booru_model_path,
-            booru_pt_url=booru_pt_url,
-            booru_auto_download_model=booru_auto_download_model,
             booru_confidence_threshold=float(
                 self.config.get("booru_confidence_threshold", 0.3)
             ),

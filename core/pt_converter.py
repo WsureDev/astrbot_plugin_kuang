@@ -9,6 +9,27 @@ from .logger import get_logger
 _logger = get_logger(__name__)
 
 
+def _is_onnx_loadable(onnx_path: Path) -> bool:
+    try:
+        import onnxruntime as ort
+    except ImportError:
+        _logger.debug(
+            "[pt_converter] onnxruntime unavailable; skip ONNX validation: %s",
+            onnx_path,
+        )
+        return True
+    try:
+        ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+        return True
+    except Exception as exc:
+        _logger.warning(
+            "[pt_converter] existing ONNX is invalid and will be regenerated: %s (%s)",
+            onnx_path,
+            exc,
+        )
+        return False
+
+
 def ensure_onnx_from_pt(
     *,
     onnx_path: str | Path,
@@ -29,8 +50,15 @@ def ensure_onnx_from_pt(
     """
     onnx_path = Path(onnx_path)
     if onnx_path.exists():
-        _logger.debug("[pt_converter] ONNX already exists: %s", onnx_path)
-        return onnx_path
+        if _is_onnx_loadable(onnx_path):
+            _logger.debug("[pt_converter] ONNX already exists: %s", onnx_path)
+            return onnx_path
+        try:
+            onnx_path.unlink()
+        except OSError as exc:
+            raise RuntimeError(
+                f"已检测到损坏的 ONNX 文件且无法删除: {onnx_path} ({exc})"
+            ) from exc
 
     if not auto_download:
         raise RuntimeError(

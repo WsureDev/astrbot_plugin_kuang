@@ -610,8 +610,8 @@ class AnimeYoloDetectionBackend(BaseYoloOnnxDetectionBackend):
 # ---------------------------------------------------------------------------
 
 DEFAULT_BOORU_YOLO_PT_URL = (
-    "https://raw.githubusercontent.com/aperveyev/booru_yolo/"
-    "d99e2032c97baf915661a3ea772845e064ee0f04/models/yolov8s_aa11.pt"
+    "https://github.com/aperveyev/booru_yolo/raw/refs/heads/main/models/"
+    "yolov11m_mm07.pt"
 )
 
 _BOORU_CLASS_NAMES = (

@@ -123,7 +123,7 @@
     "description": "booru_yolo .pt 模型下载地址",
     "hint": "用于下载 PyTorch 权重文件（体积小于 ONNX），插件加载时自动转换为 ONNX。",
     "type": "string",
-    "default": "https://raw.githubusercontent.com/aperveyev/booru_yolo/d99e2032c97baf915661a3ea772845e064ee0f04/models/yolov8s_aa11.pt"
+    "default": "https://github.com/aperveyev/booru_yolo/raw/refs/heads/main/models/yolov11m_mm07.pt"
   },
   "booru_auto_download_model": {
     "description": "自动下载 booru_yolo 模型",
