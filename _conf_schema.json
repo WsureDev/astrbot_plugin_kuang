@@ -150,8 +150,8 @@
     "default": ""
   },
   "debug_mode": {
-    "description": "输出调试日志",
-    "hint": "开启后会记录 stage1 主检测、stage2 anime 部位检测、stage2_composite 合成框、随机补框和最终编排逻辑。",
+    "description": "是否打印 debug 级别日志",
+    "hint": "开启后本插件的调试日志会以 INFO 形式输出（前缀 [DEBUG][astrbot_plugin_kuang]），不会修改 AstrBot 全局日志级别，也不影响其他插件。",
     "type": "bool",
     "default": false
   }
