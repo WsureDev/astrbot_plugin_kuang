@@ -10,14 +10,17 @@ from .models import DetectionBox, DetectionPipelineResult
 from .random_layout import PerspectiveRandomBoxGenerator
 from .yolo_backend import (
     DEFAULT_ANIME_YOLO_MODEL_URL,
+    DEFAULT_BOORU_YOLO_PT_URL,
     DEFAULT_YOLO26N_MODEL_URL,
     AnimeYoloDetectionBackend,
+    BooruYoloDetectionBackend,
     Yolo26nDetectionBackend,
 )
 
 _DETECTION_BACKENDS = {
     "yolo26n": Yolo26nDetectionBackend,
     "anime_yolo": AnimeYoloDetectionBackend,
+    "booru_yolo": BooruYoloDetectionBackend,
 }
 _ANIMAL_CATEGORIES = {
     "bird",
@@ -32,6 +35,7 @@ _ANIMAL_CATEGORIES = {
     "giraffe",
 }
 _CASCADE_YOLO26N_ANIME_BACKEND = "cascade_yolo26n_anime"
+_CASCADE_YOLO26N_BOORU_BACKEND = "cascade_yolo26n_booru"
 _logger = get_logger(__name__)
 
 
@@ -71,6 +75,14 @@ class EspBoxDetector:
         anime_fallback_trigger_count: int = 2,
         anime_merge_iou_threshold: float = 0.45,
         detection_backend: DetectionBackend | None = None,
+        booru_model_path: str = "",
+        booru_pt_url: str = DEFAULT_BOORU_YOLO_PT_URL,
+        booru_auto_download_model: bool = True,
+        booru_confidence_threshold: float = 0.3,
+        booru_nms_iou_threshold: float = 0.45,
+        booru_model_input_size: int = 640,
+        booru_nsfw_filter: bool = True,
+        booru_fallback_trigger_count: int = 2,
     ) -> None:
         self.box_count = max(1, int(box_count))
         self.enable_random_boxes = bool(enable_random_boxes)
@@ -103,6 +115,14 @@ class EspBoxDetector:
             anime_nms_iou_threshold=anime_nms_iou_threshold,
             anime_model_input_size=anime_model_input_size,
             anime_fallback_trigger_count=anime_fallback_trigger_count,
+            booru_model_path=booru_model_path,
+            booru_pt_url=booru_pt_url,
+            booru_auto_download_model=booru_auto_download_model,
+            booru_confidence_threshold=booru_confidence_threshold,
+            booru_nms_iou_threshold=booru_nms_iou_threshold,
+            booru_model_input_size=booru_model_input_size,
+            booru_nsfw_filter=booru_nsfw_filter,
+            booru_fallback_trigger_count=booru_fallback_trigger_count,
         )
         self._arranger = DetectionArranger(
             box_count=self.box_count,
@@ -144,7 +164,7 @@ class EspBoxDetector:
         image_height, image_width = image_rgb.shape[:2]
         stage1_boxes = self._run_stage1(image_rgb)
         stage2_boxes = self._run_stage2(image_rgb, stage1_boxes)
-        stage2_composite_boxes = self._arranger.compose_anime_boxes(stage2_boxes)
+        stage2_composite_boxes = self._arranger.compose_stage2_boxes(stage2_boxes)
         arranged_boxes = self._arranger.arrange(
             stage1_boxes=stage1_boxes,
             stage2_boxes=stage2_boxes,
@@ -284,8 +304,11 @@ class EspBoxDetector:
             )
             return detections
 
-        if self._backend_plan.mode != "yolo_with_anime_fallback":
-            _logger.debug("[detector] stage2 skipped because anime fallback is disabled")
+        if self._backend_plan.mode not in (
+            "yolo_with_anime_fallback",
+            "yolo_with_booru_fallback",
+        ):
+            _logger.debug("[detector] stage2 skipped because fallback is disabled")
             return []
 
         person_count = sum(1 for item in stage1_boxes if item.category == "person")
@@ -384,6 +407,14 @@ class EspBoxDetector:
         anime_nms_iou_threshold: float,
         anime_model_input_size: int,
         anime_fallback_trigger_count: int,
+        booru_model_path: str = "",
+        booru_pt_url: str = "",
+        booru_auto_download_model: bool = True,
+        booru_confidence_threshold: float = 0.3,
+        booru_nms_iou_threshold: float = 0.45,
+        booru_model_input_size: int = 640,
+        booru_nsfw_filter: bool = True,
+        booru_fallback_trigger_count: int = 2,
     ) -> _DetectorBackendPlan:
         if detection_backend is not None:
             _logger.info("[detector] using injected detection backend only")
@@ -435,6 +466,50 @@ class EspBoxDetector:
                 ignore_secondary_errors=True,
             )
 
+        if resolved_backend_name == _CASCADE_YOLO26N_BOORU_BACKEND:
+            _logger.info(
+                "[detector] using pipeline backend: primary=yolo26n secondary=booru_yolo trigger_count=%s",
+                booru_fallback_trigger_count,
+            )
+            return _DetectorBackendPlan(
+                mode="yolo_with_booru_fallback",
+                primary_backend=Yolo26nDetectionBackend(
+                    model_path=model_path,
+                    model_url=model_url or DEFAULT_YOLO26N_MODEL_URL,
+                    auto_download_model=auto_download_model,
+                    confidence_threshold=confidence_threshold,
+                    nms_iou_threshold=nms_iou_threshold,
+                    model_input_size=model_input_size,
+                ),
+                secondary_backend=BooruYoloDetectionBackend(
+                    model_path=booru_model_path,
+                    auto_download_model=False,
+                    confidence_threshold=booru_confidence_threshold,
+                    nms_iou_threshold=booru_nms_iou_threshold,
+                    model_input_size=booru_model_input_size,
+                    nsfw_filter=booru_nsfw_filter,
+                ),
+                anime_fallback_trigger_count=max(1, int(booru_fallback_trigger_count)),
+                ignore_secondary_errors=True,
+            )
+
+        if resolved_backend_name == "booru_yolo":
+            _logger.info("[detector] using booru_yolo backend only")
+            return _DetectorBackendPlan(
+                mode="single_backend",
+                primary_backend=BooruYoloDetectionBackend(
+                    model_path=booru_model_path,
+                    auto_download_model=False,
+                    confidence_threshold=booru_confidence_threshold,
+                    nms_iou_threshold=booru_nms_iou_threshold,
+                    model_input_size=booru_model_input_size,
+                    nsfw_filter=booru_nsfw_filter,
+                ),
+                secondary_backend=None,
+                anime_fallback_trigger_count=max(1, int(anime_fallback_trigger_count)),
+                ignore_secondary_errors=True,
+            )
+
         if resolved_backend_name == "anime_yolo":
             _logger.info("[detector] using anime_yolo backend only")
             return _DetectorBackendPlan(
@@ -455,7 +530,11 @@ class EspBoxDetector:
         backend_cls = _DETECTION_BACKENDS.get(resolved_backend_name)
         if backend_cls is None:
             supported = ", ".join(
-                sorted((*_DETECTION_BACKENDS.keys(), _CASCADE_YOLO26N_ANIME_BACKEND))
+                sorted((
+                    *_DETECTION_BACKENDS.keys(),
+                    _CASCADE_YOLO26N_ANIME_BACKEND,
+                    _CASCADE_YOLO26N_BOORU_BACKEND,
+                ))
             )
             raise RuntimeError(
                 f"不支持的识别器后端: {resolved_backend_name}。当前支持: {supported}"

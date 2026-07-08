@@ -13,6 +13,7 @@ from .core import (
     EspBoxProcessor,
     EspBoxRenderer,
     configure_logger,
+    ensure_onnx_from_pt,
     get_logger,
 )
 
@@ -71,6 +72,49 @@ class KuangPlugin(Star):
             f"anime_auto_download_model={anime_auto_download_model}, "
             f"anime_model_url={anime_model_url or '<default>'}"
         )
+
+        # --- booru_yolo config ---
+        enable_booru_fallback = bool(self.config.get("enable_booru_fallback", False))
+        configured_booru_model_path = str(
+            self.config.get("booru_model_path", "")
+        ).strip()
+        booru_model_path = (
+            configured_booru_model_path
+            if configured_booru_model_path
+            else str(self.model_dir / "booru_yolo.onnx")
+        )
+        booru_pt_url = str(self.config.get("booru_pt_url", "")).strip()
+        booru_auto_download_model = bool(
+            self.config.get("booru_auto_download_model", True)
+        )
+        booru_model_input_size = int(self.config.get("booru_model_input_size", 640))
+
+        # Determine if booru backend is needed
+        _needs_booru = (
+            enable_booru_fallback
+            or detector_backend in ("booru_yolo", "cascade_yolo26n_booru")
+        )
+        if _needs_booru:
+            # Eagerly ensure the ONNX model exists (download .pt + convert)
+            _logger.debug(
+                f"booru_yolo needed: ensuring ONNX at {booru_model_path}"
+            )
+            try:
+                ensure_onnx_from_pt(
+                    onnx_path=booru_model_path,
+                    pt_url=booru_pt_url,
+                    auto_download=booru_auto_download_model,
+                    model_input_size=booru_model_input_size,
+                )
+            except Exception as exc:
+                _logger.warning(
+                    f"[{_PLUGIN_NAME}] booru_yolo 模型准备失败: {exc}",
+                    exc_info=self.debug_mode,
+                )
+
+        # Resolve effective backend name for booru cascade
+        if enable_booru_fallback and detector_backend == "yolo26n":
+            detector_backend = "cascade_yolo26n_booru"
         self.detector = EspBoxDetector(
             box_count=int(self.config.get("box_count", 5)),
             model_path=model_path,
@@ -115,6 +159,20 @@ class KuangPlugin(Star):
             ),
             anime_merge_iou_threshold=float(
                 self.config.get("anime_merge_iou_threshold", 0.45)
+            ),
+            booru_model_path=booru_model_path,
+            booru_pt_url=booru_pt_url,
+            booru_auto_download_model=booru_auto_download_model,
+            booru_confidence_threshold=float(
+                self.config.get("booru_confidence_threshold", 0.3)
+            ),
+            booru_nms_iou_threshold=float(
+                self.config.get("booru_iou_threshold", 0.45)
+            ),
+            booru_model_input_size=booru_model_input_size,
+            booru_nsfw_filter=bool(self.config.get("booru_nsfw_filter", True)),
+            booru_fallback_trigger_count=int(
+                self.config.get("booru_fallback_trigger_count", 2)
             ),
         )
         self.renderer = EspBoxRenderer(

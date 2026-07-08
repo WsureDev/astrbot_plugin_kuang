@@ -603,3 +603,71 @@ class AnimeYoloDetectionBackend(BaseYoloOnnxDetectionBackend):
         if label == "Legs":
             return 2
         return 5
+
+
+# ---------------------------------------------------------------------------
+# booru_yolo: 26-class anime/CG torso component detector
+# ---------------------------------------------------------------------------
+
+DEFAULT_BOORU_YOLO_PT_URL = (
+    "https://raw.githubusercontent.com/aperveyev/booru_yolo/"
+    "d99e2032c97baf915661a3ea772845e064ee0f04/models/yolov8s_aa11.pt"
+)
+
+_BOORU_CLASS_NAMES = (
+    "head", "bust", "boob", "shld", "sideb", "belly", "nopan",
+    "butt", "ass", "split", "sprd", "vsplt", "vsprd", "hip",
+    "wing", "feral", "hdrago", "hpony", "hfox", "hrabb",
+    "hcat", "hbear", "jacko", "jackx", "hhorse", "hbird",
+)
+
+_BOORU_NSFW_CLASSES = frozenset({
+    "boob", "sideb", "nopan", "ass", "sprd", "vsprd",
+})
+
+_BOORU_HEAD_CLASSES = frozenset({
+    "head", "hdrago", "hpony", "hfox", "hrabb", "hcat", "hbear", "hhorse", "hbird",
+})
+
+_BOORU_UPPER_BODY_CLASSES = frozenset({"bust", "shld"})
+
+_BOORU_LOWER_BODY_CLASSES = frozenset({
+    "belly", "butt", "hip", "split", "vsplt",
+})
+
+
+class BooruYoloDetectionBackend(BaseYoloOnnxDetectionBackend):
+    """Detection backend using aperveyev/booru_yolo (26-class anime torso model).
+
+    The model detects fine-grained anime body parts (head, bust, belly, hip, etc.)
+    which can be assembled into full-body or upper-body composite bounding boxes
+    by the arranger.
+    """
+
+    source_name = "booru_yolo"
+    default_model_url = ""  # booru uses PT download + ONNX conversion
+    class_names = _BOORU_CLASS_NAMES
+
+    def __init__(self, *, nsfw_filter: bool = True, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.nsfw_filter = bool(nsfw_filter)
+
+    @staticmethod
+    def _priority_for_label(label: str) -> int:
+        if label in _BOORU_HEAD_CLASSES:
+            return 0
+        if label in _BOORU_UPPER_BODY_CLASSES:
+            return 1
+        if label in _BOORU_LOWER_BODY_CLASSES:
+            return 2
+        return 5
+
+    def _select_recognized_boxes(
+        self, candidates: list[DetectionBox]
+    ) -> list[DetectionBox]:
+        selected = super()._select_recognized_boxes(candidates)
+        if self.nsfw_filter:
+            selected = [
+                box for box in selected if box.category not in _BOORU_NSFW_CLASSES
+            ]
+        return selected
