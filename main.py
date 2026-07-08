@@ -34,18 +34,15 @@ class KuangPlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
-        configure_logger(logger)
+        self.debug_mode = bool(self.config.get("debug_mode", False))
+        configure_logger(logger, plugin_name=_PLUGIN_NAME, debug_enabled=self.debug_mode)
+        if self.debug_mode:
+            logger.info(f"[{_PLUGIN_NAME}] debug_mode=True，调试日志已开启")
         self.plugin_data_dir = StarTools.get_data_dir(_PLUGIN_NAME)
         self.output_dir = self.plugin_data_dir / "output"
         self.model_dir = self.plugin_data_dir / "models"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.model_dir.mkdir(parents=True, exist_ok=True)
-
-        self.debug_mode = bool(self.config.get("debug_mode", False))
-        if self.debug_mode:
-            import logging as _logging
-            _logging.getLogger().setLevel(_logging.DEBUG)
-            logger.info(f"[{_PLUGIN_NAME}] debug_mode=True，已将根 logger 级别设为 DEBUG")
 
         configured_model_path = str(self.config.get("model_path", "")).strip()
         model_path = (
@@ -68,7 +65,7 @@ class KuangPlugin(Star):
             self.config.get("anime_auto_download_model", True)
         )
         _logger.debug(
-            f"[{_PLUGIN_NAME}] detector config: backend={detector_backend}, "
+            f"detector config: backend={detector_backend}, "
             f"enable_anime_fallback={enable_anime_fallback}, "
             f"model_path={model_path}, anime_model_path={anime_model_path}, "
             f"anime_auto_download_model={anime_auto_download_model}, "
@@ -143,7 +140,7 @@ class KuangPlugin(Star):
         image_targets = direct_images or reply_images
         avatar_mode = False
         _logger.debug(
-            f"[{_PLUGIN_NAME}] image collection: direct={len(direct_images)}, "
+            f"image collection: direct={len(direct_images)}, "
             f"reply={len(reply_images)}, selected={len(image_targets)}"
         )
 
@@ -156,14 +153,14 @@ class KuangPlugin(Star):
                 return
             image_targets = [avatar_target]
             avatar_mode = True
-            _logger.debug(f"[{_PLUGIN_NAME}] no image found, falling back to avatar mode")
+            _logger.debug("no image found, falling back to avatar mode")
 
         output_paths: list[str] = []
         last_error_message = ""
         for image_target in image_targets:
             try:
                 input_path = await image_target.convert_to_file_path()
-                _logger.debug(f"[{_PLUGIN_NAME}] processing image target: {input_path}")
+                _logger.debug(f"processing image target: {input_path}")
                 output_path = await asyncio.to_thread(
                     self.processor.render_path,
                     input_path,
@@ -171,7 +168,7 @@ class KuangPlugin(Star):
                 event.track_temporary_local_file(output_path)
                 output_paths.append(output_path)
                 _logger.debug(
-                    f"[{_PLUGIN_NAME}] processing succeeded: input={input_path}, output={output_path}"
+                    f"processing succeeded: input={input_path}, output={output_path}"
                 )
             except Exception as exc:
                 last_error_message = str(exc).strip()
@@ -190,7 +187,7 @@ class KuangPlugin(Star):
             return
 
         _logger.debug(
-            f"[{_PLUGIN_NAME}] 完成处理: inputs={len(image_targets)}, "
+            f"完成处理: inputs={len(image_targets)}, "
             f"outputs={len(output_paths)}, avatar_mode={avatar_mode}"
         )
 
@@ -226,12 +223,12 @@ class KuangPlugin(Star):
                 avatar_value = str(getattr(sender, attr_name, "") or "").strip()
                 if avatar_value.startswith("http://") or avatar_value.startswith("https://"):
                     _logger.debug(
-                        f"[{_PLUGIN_NAME}] avatar target resolved from sender.{attr_name}: {avatar_value}"
+                        f"avatar target resolved from sender.{attr_name}: {avatar_value}"
                     )
                     return Image.fromURL(avatar_value)
 
         if not avatar_user_id:
-            _logger.debug(f"[{_PLUGIN_NAME}] avatar target unavailable: no target_user_id or sender_id")
+            _logger.debug(f"avatar target unavailable: no target_user_id or sender_id")
             return None
 
         template = str(self.config.get("avatar_url_template", "")).strip()
@@ -242,19 +239,19 @@ class KuangPlugin(Star):
                 platform_id=event.get_platform_id(),
             )
             _logger.debug(
-                f"[{_PLUGIN_NAME}] avatar target resolved from template: user_id={avatar_user_id}, url={avatar_url}"
+                f"avatar target resolved from template: user_id={avatar_user_id}, url={avatar_url}"
             )
             return Image.fromURL(avatar_url)
 
         if avatar_user_id.isdigit():
             avatar_url = _DEFAULT_QQ_AVATAR.format(user_id=avatar_user_id)
             _logger.debug(
-                f"[{_PLUGIN_NAME}] avatar target resolved from default QQ avatar: user_id={avatar_user_id}, url={avatar_url}"
+                f"avatar target resolved from default QQ avatar: user_id={avatar_user_id}, url={avatar_url}"
             )
             return Image.fromURL(avatar_url)
 
         _logger.debug(
-            f"[{_PLUGIN_NAME}] avatar target unavailable: non-numeric user_id={avatar_user_id!r}"
+            f"avatar target unavailable: non-numeric user_id={avatar_user_id!r}"
         )
         return None
 
@@ -273,6 +270,6 @@ class KuangPlugin(Star):
         sanitized = _BIDI_CONTROL_RE.sub("", message_str).strip()
         matched = bool(_KUANG_TRIGGER_RE.search(sanitized))
         _logger.debug(
-            f"[{_PLUGIN_NAME}] trigger check: raw={message_str!r}, sanitized={sanitized!r}, matched={matched}"
+            f"trigger check: raw={message_str!r}, sanitized={sanitized!r}, matched={matched}"
         )
         return matched
