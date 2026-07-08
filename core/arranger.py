@@ -7,8 +7,10 @@ _logger = get_logger(__name__)
 _ANIME_HEAD = "Head"
 _ANIME_TORSO = "Torso"
 _ANIME_LEGS = "Legs"
+_STAGE1_HUMANOID_GUESS = "stage1_humanoid_guess"
 _HUMANOID_ROLES = {
     "person_full",
+    _STAGE1_HUMANOID_GUESS,
     "anime_full_body",
     "anime_upper_body",
     "anime_torso",
@@ -150,8 +152,13 @@ class DetectionArranger:
                 )
             selected.append(candidate)
             _logger.debug("[arranger] accept candidate: %s", candidate.describe())
-            if len(selected) >= self.box_count:
-                break
+        if len(selected) > self.box_count:
+            _logger.debug(
+                "[arranger] trim accepted candidates: kept=%s dropped=%s",
+                self.box_count,
+                len(selected) - self.box_count,
+            )
+            selected = selected[: self.box_count]
         _logger.debug(
             "[arranger] arrange done: selected=%s details=%s",
             len(selected),
@@ -166,9 +173,42 @@ class DetectionArranger:
         stage2_boxes: list[DetectionBox],
         stage2_composite_boxes: list[DetectionBox],
     ) -> list[DetectionBox]:
+        normalized_stage2_composites: list[DetectionBox] = []
+        for item in stage2_composite_boxes:
+            semantic_role = item.semantic_role or "anime_upper_body"
+            normalized_stage2_composites.append(
+                item.clone(
+                    stage=item.stage or "stage2_composite",
+                    semantic_role=semantic_role,
+                    part=item.part or "torso",
+                    priority=self._arrangement_priority_for_role(semantic_role),
+                )
+            )
+
+        normalized_stage2_boxes: list[DetectionBox] = []
+        for item in stage2_boxes:
+            semantic_role = item.semantic_role or self._semantic_role_for_stage2(item)
+            normalized_stage2_boxes.append(
+                item.clone(
+                    stage=item.stage or "stage2_anime",
+                    semantic_role=semantic_role,
+                    part=item.part or item.category.lower(),
+                    priority=self._arrangement_priority_for_role(semantic_role),
+                )
+            )
+
+        stage2_humanoid_hints = [
+            item
+            for item in (*normalized_stage2_composites, *normalized_stage2_boxes)
+            if self._is_stage2_humanoid(item)
+        ]
+
         candidates: list[DetectionBox] = []
         for item in stage1_boxes:
-            semantic_role = item.semantic_role or self._semantic_role_for_stage1(item)
+            semantic_role = item.semantic_role or self._semantic_role_for_stage1(
+                item,
+                stage2_humanoid_hints,
+            )
             candidates.append(
                 item.clone(
                     stage=item.stage or "stage1_primary",
@@ -177,26 +217,8 @@ class DetectionArranger:
                     priority=self._arrangement_priority_for_role(semantic_role),
                 )
             )
-        for item in stage2_composite_boxes:
-            semantic_role = item.semantic_role or "anime_upper_body"
-            candidates.append(
-                item.clone(
-                    stage=item.stage or "stage2_composite",
-                    semantic_role=semantic_role,
-                    part=item.part or "torso",
-                    priority=self._arrangement_priority_for_role(semantic_role),
-                )
-            )
-        for item in stage2_boxes:
-            semantic_role = item.semantic_role or self._semantic_role_for_stage2(item)
-            candidates.append(
-                item.clone(
-                    stage=item.stage or "stage2_anime",
-                    semantic_role=semantic_role,
-                    part=item.part or item.category.lower(),
-                    priority=self._arrangement_priority_for_role(semantic_role),
-                )
-            )
+        candidates.extend(normalized_stage2_composites)
+        candidates.extend(normalized_stage2_boxes)
         return candidates
 
     def _resolve_conflicts(
@@ -225,16 +247,18 @@ class DetectionArranger:
         if not self._has_arrangement_conflict(candidate, other):
             return "keep_both"
 
-        if self._is_stage2_humanoid(candidate) and self._is_stage1_person(other):
+        if self._is_stage2_humanoid(candidate) and self._is_stage1_humanoid_candidate(other):
             if not self._is_same_target_pair(candidate, other):
                 return "keep_both"
             if self._should_stage2_replace_stage1(candidate, other):
                 return "replace_selected"
             return "drop_candidate"
 
-        if self._is_stage1_person(candidate) and self._is_stage2_humanoid(other):
+        if self._is_stage1_humanoid_candidate(candidate) and self._is_stage2_humanoid(other):
             if not self._is_same_target_pair(candidate, other):
                 return "keep_both"
+            if self._should_stage2_replace_stage1(other, candidate):
+                return "drop_candidate"
             return "replace_selected"
 
         if (
@@ -390,12 +414,17 @@ class DetectionArranger:
             + (part.score * 0.2)
         )
 
-    @staticmethod
-    def _semantic_role_for_stage1(box: DetectionBox) -> str:
+    def _semantic_role_for_stage1(
+        self,
+        box: DetectionBox,
+        stage2_humanoid_hints: list[DetectionBox],
+    ) -> str:
         if box.category == "person":
             return "person_full"
         if box.category in _ANIMAL_CATEGORIES:
             return "animal"
+        if self._looks_like_stage1_humanoid_guess(box, stage2_humanoid_hints):
+            return _STAGE1_HUMANOID_GUESS
         return "other"
 
     @staticmethod
@@ -457,9 +486,33 @@ class DetectionArranger:
             )
         return True
 
+    def _looks_like_stage1_humanoid_guess(
+        self,
+        box: DetectionBox,
+        stage2_humanoid_hints: list[DetectionBox],
+    ) -> bool:
+        for hint in stage2_humanoid_hints:
+            if not box.overlaps(hint):
+                continue
+            if box.area <= hint.area:
+                continue
+            if (
+                self._smaller_overlap_ratio(box, hint)
+                < self.humanoid_containment_threshold
+            ):
+                continue
+            if self._center_offset_ratio(box, hint) > 0.35:
+                continue
+            if not self._role_alignment_ok(hint, box):
+                continue
+            return True
+        return False
+
     @staticmethod
-    def _is_stage1_person(box: DetectionBox) -> bool:
-        return box.stage == "stage1_primary" and box.semantic_role == "person_full"
+    def _is_stage1_humanoid_candidate(box: DetectionBox) -> bool:
+        return box.stage == "stage1_primary" and (
+            box.semantic_role in {"person_full", _STAGE1_HUMANOID_GUESS}
+        )
 
     @staticmethod
     def _is_stage2_humanoid(box: DetectionBox) -> bool:
@@ -476,6 +529,7 @@ class DetectionArranger:
         order = {
             "person_full": 0,
             "anime_full_body": 1,
+            _STAGE1_HUMANOID_GUESS: 2,
             "anime_upper_body": 2,
             "anime_torso": 3,
             "anime_head": 4,
