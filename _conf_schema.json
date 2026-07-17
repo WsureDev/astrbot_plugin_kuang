@@ -25,7 +25,7 @@
   },
   "detector_backend": {
     "description": "识别器后端",
-    "hint": "默认使用 yolo26n。支持: yolo26n, anime_yolo, booru_yolo, cascade_yolo26n_anime, cascade_yolo26n_booru。也可通过 enable_anime_fallback 或 enable_booru_fallback 快捷开启对应 cascade 模式。",
+    "hint": "默认使用 yolo26n。高级用法下也支持 cascade_yolo26n_anime，用于开启二次元补强兜底。",
     "type": "string",
     "default": "yolo26n"
   },
@@ -106,60 +106,6 @@
     "hint": "默认 0.45。值越小越容易去掉主模型与动漫模型之间的重叠框。",
     "type": "float",
     "default": 0.45
-  },
-  "enable_booru_fallback": {
-    "description": "启用 booru_yolo 二次元部位检测兜底",
-    "hint": "默认关闭。开启后，当 yolo26n 的 person 检测较少时，会使用 booru_yolo 26 类动漫躯干部位模型做补强。首次启用会下载约 22MB 的 .pt 模型并转换为 ONNX。",
-    "type": "bool",
-    "default": false
-  },
-  "booru_model_path": {
-    "description": "booru_yolo ONNX 模型文件路径",
-    "hint": "留空时默认使用插件数据目录下的 models/booru_yolo.onnx。插件加载时会自动从 .pt 文件转换。",
-    "type": "string",
-    "default": ""
-  },
-  "booru_pt_url": {
-    "description": "booru_yolo .pt 模型下载地址",
-    "hint": "用于下载 PyTorch 权重文件（体积小于 ONNX），插件加载时自动转换为 ONNX。",
-    "type": "string",
-    "default": "https://github.com/aperveyev/booru_yolo/raw/refs/heads/main/models/yolov11m_mm07.pt"
-  },
-  "booru_auto_download_model": {
-    "description": "自动下载 booru_yolo 模型",
-    "hint": "开启后，若本地缺少 booru_yolo 模型文件，会自动下载 .pt 并转换为 ONNX。",
-    "type": "bool",
-    "default": true
-  },
-  "booru_confidence_threshold": {
-    "description": "booru_yolo 识别置信度阈值",
-    "hint": "默认 0.3。用于 26 类动漫躯干部位检测。",
-    "type": "float",
-    "default": 0.3
-  },
-  "booru_iou_threshold": {
-    "description": "booru_yolo 去重 IoU 阈值",
-    "hint": "默认 0.45。仅影响 booru_yolo 模型内部的 NMS 去重。",
-    "type": "float",
-    "default": 0.45
-  },
-  "booru_model_input_size": {
-    "description": "booru_yolo 输入尺寸",
-    "hint": "默认 640。按模型训练配置保持默认即可。",
-    "type": "int",
-    "default": 640
-  },
-  "booru_nsfw_filter": {
-    "description": "过滤 booru_yolo 的 NSFW 类别",
-    "hint": "开启后忽略 boob/sideb/nopan/ass/sprd/vsprd 等 NSFW 检测结果。",
-    "type": "bool",
-    "default": true
-  },
-  "booru_fallback_trigger_count": {
-    "description": "触发 booru_yolo 兜底的主检测数量阈值",
-    "hint": "默认 2。主 yolo26n 的 person 检测数量少于此值时，运行 booru_yolo 补强。",
-    "type": "int",
-    "default": 2
   },
   "line_width": {
     "description": "白色线框基础线宽",

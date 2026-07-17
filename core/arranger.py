@@ -8,13 +8,6 @@ _ANIME_HEAD = "Head"
 _ANIME_TORSO = "Torso"
 _ANIME_LEGS = "Legs"
 _STAGE1_HUMANOID_GUESS = "stage1_humanoid_guess"
-
-# booru_yolo part groupings for composite assembly
-_BOORU_HEAD_CLASSES = frozenset({
-    "head", "hdrago", "hpony", "hfox", "hrabb", "hcat", "hbear", "hhorse", "hbird",
-})
-_BOORU_UPPER_CLASSES = frozenset({"bust", "shld"})
-_BOORU_LOWER_CLASSES = frozenset({"belly", "butt", "hip", "split", "vsplt"})
 _HUMANOID_ROLES = {
     "person_full",
     _STAGE1_HUMANOID_GUESS,
@@ -117,90 +110,6 @@ class DetectionArranger:
             len(composites),
             self._summarize(composites),
         )
-        return composites
-
-    def compose_booru_boxes(
-        self,
-        boxes: list[DetectionBox],
-    ) -> list[DetectionBox]:
-        """Assemble booru_yolo fine-grained parts into full/upper-body composites.
-
-        Strategy: use bust/shld (upper body core) as anchor, associate head above
-        and belly/hip/butt below to form full_body or upper_body composites.
-        """
-        heads = [item for item in boxes if item.category in _BOORU_HEAD_CLASSES]
-        uppers = [item for item in boxes if item.category in _BOORU_UPPER_CLASSES]
-        lowers = [item for item in boxes if item.category in _BOORU_LOWER_CLASSES]
-        used_heads: set[int] = set()
-        used_lowers: set[int] = set()
-        composites: list[DetectionBox] = []
-        _logger.debug(
-            "[arranger] compose booru start: heads=%s uppers=%s lowers=%s",
-            len(heads),
-            len(uppers),
-            len(lowers),
-        )
-        for upper in sorted(uppers, key=self._selection_sort_key):
-            head_index = self._pick_best_part_index(
-                anchor=upper, parts=heads, used_indices=used_heads, part_name="head",
-            )
-            lower_index = self._pick_best_part_index(
-                anchor=upper, parts=lowers, used_indices=used_lowers, part_name="legs",
-            )
-            parts = [upper]
-            part_names = ["upper"]
-            if head_index is not None:
-                parts.append(heads[head_index])
-                part_names.insert(0, "head")
-                used_heads.add(head_index)
-            if lower_index is not None:
-                parts.append(lowers[lower_index])
-                part_names.append("lower")
-                used_lowers.add(lower_index)
-            if len(parts) == 1:
-                continue
-
-            has_head = "head" in part_names
-            has_lower = "lower" in part_names
-            union_box = upper.union(*parts[1:]).clone(
-                source="booru_yolo_composite",
-                category="+".join(part_names),
-                stage="stage2_composite",
-                part="+".join(part_names),
-                semantic_role=(
-                    "anime_full_body" if has_head and has_lower
-                    else "anime_upper_body"
-                ),
-                priority=(1 if has_head and has_lower else 2),
-                composite=True,
-            )
-            composites.append(union_box)
-            _logger.debug(
-                "[arranger] booru composite built: upper=%s head=%s lower=%s composite=%s",
-                upper.describe(),
-                heads[head_index].describe() if head_index is not None else "<none>",
-                lowers[lower_index].describe() if lower_index is not None else "<none>",
-                union_box.describe(),
-            )
-        _logger.debug(
-            "[arranger] compose booru done: composites=%s details=%s",
-            len(composites),
-            self._summarize(composites),
-        )
-        return composites
-
-    def compose_stage2_boxes(
-        self,
-        boxes: list[DetectionBox],
-    ) -> list[DetectionBox]:
-        """Unified entry: dispatch to appropriate composition strategy by source."""
-        booru_boxes = [b for b in boxes if b.source == "booru_yolo"]
-        anime_boxes = [b for b in boxes if b.source != "booru_yolo"]
-        composites: list[DetectionBox] = []
-        if booru_boxes:
-            composites.extend(self.compose_booru_boxes(booru_boxes))
-        if anime_boxes:
-            composites.extend(self.compose_anime_boxes(anime_boxes))
         return composites
 
     def arrange(
