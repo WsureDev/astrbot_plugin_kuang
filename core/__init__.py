@@ -4,8 +4,10 @@ from .detector import EspBoxDetector
 from .logger import configure as configure_logger
 from .logger import get_logger, set_debug_enabled, set_plugin_name
 from .models import DetectionBox, DetectionPipelineResult
+from .motion_backend import MotionDetectionBackend
 from .processor import EspBoxProcessor
 from .renderer import EspBoxRenderer
+from .saliency_backend import SaliencyDetectionBackend
 from .yolo_backend import (
     AnimeYoloDetectionBackend,
     Yolo26nDetectionBackend,
@@ -20,6 +22,8 @@ __all__ = [
     "EspBoxDetector",
     "EspBoxProcessor",
     "EspBoxRenderer",
+    "MotionDetectionBackend",
+    "SaliencyDetectionBackend",
     "Yolo26nDetectionBackend",
     "configure_logger",
     "get_logger",

@@ -130,7 +130,12 @@ class BaseYoloOnnxDetectionBackend:
         nms_iou_threshold: float = 0.45,
         model_input_size: int = 640,
     ) -> None:
-        self.model_path = Path(model_path)
+        resolved_model_path = str(model_path or "").strip()
+        if not resolved_model_path:
+            raise ValueError(
+                f"{self.source_name} model_path 不能为空，请指定 ONNX 模型文件路径。"
+            )
+        self.model_path = Path(resolved_model_path)
         resolved_model_url = str(model_url or "").strip()
         self.model_url = resolved_model_url or self.default_model_url
         self.auto_download_model = bool(auto_download_model)
@@ -211,6 +216,10 @@ class BaseYoloOnnxDetectionBackend:
 
     def _ensure_model_file(self) -> Path:
         if self.model_path.exists():
+            if not self.model_path.is_file():
+                raise RuntimeError(
+                    f"{self.source_name} 模型路径不是文件: {self.model_path}"
+                )
             file_size = self._safe_file_size(self.model_path)
             _logger.debug(
                 "[%s] using local model file: %s size=%s",

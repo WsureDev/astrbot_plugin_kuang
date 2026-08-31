@@ -39,6 +39,7 @@ class DetectionArranger:
         overlap_iou_threshold: float = 0.55,
         containment_threshold: float = 0.72,
         humanoid_containment_threshold: float = 0.55,
+        anime_merge_iou_threshold: float | None = None,
     ) -> None:
         self.box_count = max(1, int(box_count))
         self.overlap_iou_threshold = max(0.0, float(overlap_iou_threshold))
@@ -46,6 +47,17 @@ class DetectionArranger:
         self.humanoid_containment_threshold = max(
             0.0,
             float(humanoid_containment_threshold),
+        )
+        # Keep the generic arrangement threshold independent from the legacy
+        # anime merge knob.  When callers only provide the old parameter, use
+        # it for both paths to preserve the previous direct-call behavior.
+        self.anime_merge_iou_threshold = max(
+            0.0,
+            float(
+                self.overlap_iou_threshold
+                if anime_merge_iou_threshold is None
+                else anime_merge_iou_threshold
+            ),
         )
 
     def compose_anime_boxes(
@@ -118,11 +130,15 @@ class DetectionArranger:
         stage1_boxes: list[DetectionBox],
         stage2_boxes: list[DetectionBox],
         stage2_composite_boxes: list[DetectionBox],
+        stage3_boxes: list[DetectionBox] | None = None,
+        stage4_boxes: list[DetectionBox] | None = None,
     ) -> list[DetectionBox]:
         candidates = self._build_candidates(
             stage1_boxes=stage1_boxes,
             stage2_boxes=stage2_boxes,
             stage2_composite_boxes=stage2_composite_boxes,
+            stage3_boxes=stage3_boxes or [],
+            stage4_boxes=stage4_boxes or [],
         )
         _logger.debug(
             "[arranger] arrange start: candidates=%s details=%s",
@@ -172,6 +188,8 @@ class DetectionArranger:
         stage1_boxes: list[DetectionBox],
         stage2_boxes: list[DetectionBox],
         stage2_composite_boxes: list[DetectionBox],
+        stage3_boxes: list[DetectionBox],
+        stage4_boxes: list[DetectionBox],
     ) -> list[DetectionBox]:
         normalized_stage2_composites: list[DetectionBox] = []
         for item in stage2_composite_boxes:
@@ -228,6 +246,26 @@ class DetectionArranger:
             )
         candidates.extend(normalized_stage2_composites)
         candidates.extend(normalized_stage2_boxes)
+        for item in stage4_boxes:
+            semantic_role = item.semantic_role or "motion"
+            candidates.append(
+                item.clone(
+                    stage=item.stage or "stage4_motion",
+                    semantic_role=semantic_role,
+                    part=item.part or "motion",
+                    priority=self._arrangement_priority_for_role(semantic_role),
+                )
+            )
+        for item in stage3_boxes:
+            semantic_role = item.semantic_role or "salient"
+            candidates.append(
+                item.clone(
+                    stage=item.stage or "stage3_salient",
+                    semantic_role=semantic_role,
+                    part=item.part or "salient",
+                    priority=self._arrangement_priority_for_role(semantic_role),
+                )
+            )
         return candidates
 
     def _resolve_conflicts(
@@ -287,7 +325,12 @@ class DetectionArranger:
     ) -> bool:
         iou = candidate.iou(other)
         containment = candidate.containment_ratio(other)
-        if iou >= self.overlap_iou_threshold:
+        overlap_threshold = (
+            self.anime_merge_iou_threshold
+            if self._is_stage1_stage2_pair(candidate, other)
+            else self.overlap_iou_threshold
+        )
+        if iou >= overlap_threshold:
             return True
         if containment >= self.containment_threshold:
             return True
@@ -299,6 +342,16 @@ class DetectionArranger:
         ):
             return True
         return False
+
+    @staticmethod
+    def _is_stage1_stage2_pair(
+        left: DetectionBox,
+        right: DetectionBox,
+    ) -> bool:
+        stages = {left.stage, right.stage}
+        return "stage1_primary" in stages and bool(
+            stages & {"stage2_anime", "stage2_composite"}
+        )
 
     def _is_same_target_pair(
         self,
@@ -452,6 +505,10 @@ class DetectionArranger:
             return "humanoid"
         if box.semantic_role == "animal" or box.category in _ANIMAL_CATEGORIES:
             return "animal"
+        if box.semantic_role == "motion":
+            return "motion"
+        if box.semantic_role == "salient":
+            return "salient"
         if box.category == "random":
             return "random"
         return "other"
@@ -544,9 +601,11 @@ class DetectionArranger:
             "anime_head": 4,
             "anime_legs": 5,
             "animal": 6,
-            "other": 7,
+            "motion": 7,
+            "salient": 8,
+            "other": 9,
         }
-        return order.get(role, 7)
+        return order.get(role, 9)
 
     @staticmethod
     def _summarize(boxes: list[DetectionBox]) -> str:

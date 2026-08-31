@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 from .logger import get_logger
@@ -35,11 +36,16 @@ class EspBoxProcessor:
                 return self._render_gif(image_path)
 
         detection_result = self.detector.analyze_from_path(image_path)
+        stage3_boxes = getattr(detection_result, "stage3_boxes", []) or []
+        stage4_boxes = getattr(detection_result, "stage4_boxes", []) or []
         _logger.debug(
-            "[processor] detector pipeline: stage1=%s stage2=%s stage2_composite=%s arranged=%s random=%s final=%s",
+            "[processor] detector pipeline: stage1=%s stage2=%s stage2_composite=%s"
+            " stage3=%s stage4=%s arranged=%s random=%s final=%s",
             len(detection_result.stage1_boxes),
             len(detection_result.stage2_boxes),
             len(detection_result.stage2_composite_boxes),
+            len(stage3_boxes),
+            len(stage4_boxes),
             len(detection_result.arranged_boxes),
             len(detection_result.random_boxes),
             len(detection_result.final_boxes),
@@ -61,6 +67,9 @@ class EspBoxProcessor:
 
         rendered_frames = []
         durations: list[int] = []
+        previous_frame_array = None
+        analyze = self.detector.analyze
+        accepts_previous_frame = self._supports_previous_frame(analyze)
 
         with Image.open(image_path) as image:
             base_duration = int(image.info.get("duration", 100) or 100)
@@ -72,14 +81,28 @@ class EspBoxProcessor:
                 duration = int(frame.info.get("duration", base_duration) or base_duration)
                 rgba_frame = frame.convert("RGBA")
                 rgb_frame = rgba_frame.convert("RGB")
-                detection_result = self.detector.analyze(np.asarray(rgb_frame))
+                current_frame_array = np.asarray(rgb_frame)
+                if accepts_previous_frame:
+                    detection_result = analyze(
+                        current_frame_array,
+                        previous_frame_rgb=previous_frame_array,
+                    )
+                else:
+                    # Preserve compatibility with injected detectors written
+                    # before temporal detection was added.
+                    detection_result = analyze(current_frame_array)
+                stage3_boxes = getattr(detection_result, "stage3_boxes", []) or []
+                stage4_boxes = getattr(detection_result, "stage4_boxes", []) or []
                 _logger.debug(
-                    "[processor] GIF frame=%s duration=%sms stage1=%s stage2=%s stage2_composite=%s arranged=%s random=%s final=%s",
+                    "[processor] GIF frame=%s duration=%sms stage1=%s stage2=%s"
+                    " stage2_composite=%s stage3=%s stage4=%s arranged=%s random=%s final=%s",
                     frame_index,
                     duration,
                     len(detection_result.stage1_boxes),
                     len(detection_result.stage2_boxes),
                     len(detection_result.stage2_composite_boxes),
+                    len(stage3_boxes),
+                    len(stage4_boxes),
                     len(detection_result.arranged_boxes),
                     len(detection_result.random_boxes),
                     len(detection_result.final_boxes),
@@ -88,6 +111,7 @@ class EspBoxProcessor:
                     self.renderer.draw_boxes(rgba_frame, detection_result.final_boxes)
                 )
                 durations.append(max(20, duration))
+                previous_frame_array = current_frame_array
 
         if not rendered_frames:
             raise RuntimeError("GIF 中没有可处理的帧。")
@@ -104,3 +128,23 @@ class EspBoxProcessor:
             output_path,
         )
         return output_path
+
+    @staticmethod
+    def _supports_previous_frame(analyze) -> bool:
+        """Return whether a detector accepts the temporal keyword argument.
+
+        The processor is also used with lightweight injected detectors in
+        tests and integrations.  Signature inspection avoids catching an
+        unrelated ``TypeError`` raised from inside detector inference.
+        """
+        try:
+            signature = inspect.signature(analyze)
+        except (TypeError, ValueError):
+            # If a callable does not expose a signature, assume the current
+            # detector contract; this keeps wrapped/new implementations useful.
+            return True
+        parameters = signature.parameters
+        return "previous_frame_rgb" in parameters or any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )

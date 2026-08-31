@@ -107,6 +107,90 @@
     "type": "float",
     "default": 0.45
   },
+  "enable_saliency": {
+    "description": "启用显著性检测（阶段3）",
+    "hint": "默认关闭。开启后使用 U²-Net-p ONNX 识别『未知但明显是前景』的主体，覆盖卡通形象、机器人、雕塑、玩偶等 YOLO 无类可用的目标。",
+    "type": "bool",
+    "default": false
+  },
+  "saliency_model_path": {
+    "description": "显著性模型文件路径",
+    "hint": "留空时使用插件数据目录下的 models/u2netp.onnx。开启 saliency_auto_download_model 时会自动下载。",
+    "type": "string",
+    "default": ""
+  },
+  "saliency_model_url": {
+    "description": "显著性模型下载地址",
+    "hint": "默认使用 rembg 发布的 U²-Net-p ONNX 地址。仅在 saliency_auto_download_model 开启且本地缺少模型时使用。",
+    "type": "string",
+    "default": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx"
+  },
+  "saliency_auto_download_model": {
+    "description": "自动下载显著性模型",
+    "hint": "开启后，若本地缺少显著性模型，会尝试从 saliency_model_url 下载。",
+    "type": "bool",
+    "default": true
+  },
+  "saliency_model_input_size": {
+    "description": "显著性模型输入尺寸",
+    "hint": "默认 320。U²-Net-p 官方推荐 320，改大会更精准但显著变慢。",
+    "type": "int",
+    "default": 320
+  },
+  "saliency_threshold": {
+    "description": "显著性 mask 二值化阈值",
+    "hint": "默认 0.5。调低会把更多『疑似前景』作为主体，调高会更保守。",
+    "type": "float",
+    "default": 0.5
+  },
+  "saliency_min_area_ratio": {
+    "description": "显著性最小连通域面积占比",
+    "hint": "默认 0.005（0.5% mask 面积）。小于该值的显著块会被视为噪点丢弃。",
+    "type": "float",
+    "default": 0.005
+  },
+  "saliency_max_boxes": {
+    "description": "显著性阶段最多产出多少个框",
+    "hint": "默认 8。arranger 后续还会与其它 stage 竞争，这里只是候选上限。",
+    "type": "int",
+    "default": 8
+  },
+  "enable_motion": {
+    "description": "启用运动检测（阶段4，仅 GIF）",
+    "hint": "默认关闭。开启后 GIF 会用帧差捕捉移动物体，静态图片不受影响。",
+    "type": "bool",
+    "default": false
+  },
+  "motion_diff_threshold": {
+    "description": "帧差判定阈值",
+    "hint": "默认 25（灰度 0-255）。调低会更敏感，也更容易被压缩噪声干扰；调高会漏掉幅度小的移动。",
+    "type": "int",
+    "default": 25
+  },
+  "motion_min_area_ratio": {
+    "description": "运动连通域最小面积占比",
+    "hint": "默认 0.005。用于过滤帧间抖动 / 压缩伪影带来的琐碎运动块。",
+    "type": "float",
+    "default": 0.005
+  },
+  "motion_max_boxes": {
+    "description": "运动阶段最多产出多少个框",
+    "hint": "默认 8。同一 GIF 中运动块通常不会太多，值不必调很大。",
+    "type": "int",
+    "default": 8
+  },
+  "motion_downscale_long_edge": {
+    "description": "运动检测下采样长边像素",
+    "hint": "默认 240。帧差在小图上计算就够用，能大幅降低 GIF 逐帧开销。",
+    "type": "int",
+    "default": 240
+  },
+  "motion_dilate_radius": {
+    "description": "运动 mask 膨胀半径",
+    "hint": "默认 4（下采样后的工作尺寸像素）。用来把同一目标的碎片粘成整块；调高会更粗但更完整，调 0 关闭。",
+    "type": "int",
+    "default": 4
+  },
   "line_width": {
     "description": "白色线框基础线宽",
     "hint": "数值越大线条越粗。实际绘制时会结合图片尺寸做最小值修正。",

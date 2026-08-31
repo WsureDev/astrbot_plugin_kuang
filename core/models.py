@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 
 @dataclass(slots=True)
@@ -107,9 +107,18 @@ class DetectionBox:
 
 @dataclass(slots=True)
 class DetectionPipelineResult:
+    """Detection output with a backward-compatible core field order.
+
+    ``stage3_boxes`` and ``stage4_boxes`` were added after the original public
+    fields so callers that still construct the six-field result positionally
+    continue to work.  New code should prefer keyword arguments.
+    """
+
     stage1_boxes: list[DetectionBox]
     stage2_boxes: list[DetectionBox]
     stage2_composite_boxes: list[DetectionBox]
     arranged_boxes: list[DetectionBox]
     random_boxes: list[DetectionBox]
     final_boxes: list[DetectionBox]
+    stage3_boxes: list[DetectionBox] = field(default_factory=list)
+    stage4_boxes: list[DetectionBox] = field(default_factory=list)

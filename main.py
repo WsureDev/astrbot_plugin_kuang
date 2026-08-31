@@ -58,6 +58,14 @@ class KuangPlugin(Star):
             if configured_anime_model_path
             else str(self.model_dir / "anime_yolo.onnx")
         )
+        configured_saliency_model_path = str(
+            self.config.get("saliency_model_path", "")
+        ).strip()
+        saliency_model_path = (
+            configured_saliency_model_path
+            if configured_saliency_model_path
+            else str(self.model_dir / "u2netp.onnx")
+        )
         detector_backend = str(self.config.get("detector_backend", "yolo26n")).strip()
         enable_anime_fallback = bool(self.config.get("enable_anime_fallback", False))
         anime_model_url = str(self.config.get("anime_model_url", "")).strip()
@@ -115,6 +123,40 @@ class KuangPlugin(Star):
             ),
             anime_merge_iou_threshold=float(
                 self.config.get("anime_merge_iou_threshold", 0.45)
+            ),
+            enable_saliency=bool(self.config.get("enable_saliency", False)),
+            saliency_model_path=saliency_model_path,
+            saliency_model_url=str(
+                self.config.get("saliency_model_url", "")
+            ).strip(),
+            saliency_auto_download_model=bool(
+                self.config.get("saliency_auto_download_model", True)
+            ),
+            saliency_model_input_size=int(
+                self.config.get("saliency_model_input_size", 320)
+            ),
+            saliency_threshold=float(
+                self.config.get("saliency_threshold", 0.5)
+            ),
+            saliency_min_area_ratio=float(
+                self.config.get("saliency_min_area_ratio", 0.005)
+            ),
+            saliency_max_boxes=int(
+                self.config.get("saliency_max_boxes", 8)
+            ),
+            enable_motion=bool(self.config.get("enable_motion", False)),
+            motion_diff_threshold=int(
+                self.config.get("motion_diff_threshold", 25)
+            ),
+            motion_min_area_ratio=float(
+                self.config.get("motion_min_area_ratio", 0.005)
+            ),
+            motion_max_boxes=int(self.config.get("motion_max_boxes", 8)),
+            motion_downscale_long_edge=int(
+                self.config.get("motion_downscale_long_edge", 240)
+            ),
+            motion_dilate_radius=int(
+                self.config.get("motion_dilate_radius", 4)
             ),
         )
         self.renderer = EspBoxRenderer(
