@@ -18,6 +18,12 @@ class ConfigSchemaTests(unittest.TestCase):
             "saliency_threshold",
             "saliency_min_area_ratio",
             "saliency_max_boxes",
+            "saliency_max_foreground_ratio",
+            "saliency_preserve_aspect_ratio",
+            "saliency_intra_op_num_threads",
+            "saliency_inter_op_num_threads",
+            "saliency_reuse_static_frames",
+            "saliency_minmax_normalize_output",
             "enable_motion",
             "motion_diff_threshold",
             "motion_min_area_ratio",
@@ -29,6 +35,11 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertTrue(expected.issubset(schema))
         self.assertFalse(schema["enable_saliency"]["default"])
         self.assertFalse(schema["enable_motion"]["default"])
+        self.assertFalse(schema["saliency_preserve_aspect_ratio"]["default"])
+        self.assertEqual(schema["saliency_max_foreground_ratio"]["default"], 0.92)
+        self.assertEqual(schema["saliency_intra_op_num_threads"]["default"], 0)
+        self.assertTrue(schema["saliency_reuse_static_frames"]["default"])
+        self.assertTrue(schema["saliency_minmax_normalize_output"]["default"])
         for key in expected:
             self.assertRegex(main_text, rf'config\.get\("{re.escape(key)}"')
 

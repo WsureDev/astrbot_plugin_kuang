@@ -144,6 +144,24 @@ class KuangPlugin(Star):
             saliency_max_boxes=int(
                 self.config.get("saliency_max_boxes", 8)
             ),
+            saliency_max_foreground_ratio=float(
+                self.config.get("saliency_max_foreground_ratio", 0.92)
+            ),
+            saliency_preserve_aspect_ratio=bool(
+                self.config.get("saliency_preserve_aspect_ratio", False)
+            ),
+            saliency_intra_op_num_threads=int(
+                self.config.get("saliency_intra_op_num_threads", 0)
+            ),
+            saliency_inter_op_num_threads=int(
+                self.config.get("saliency_inter_op_num_threads", 0)
+            ),
+            saliency_reuse_static_frames=bool(
+                self.config.get("saliency_reuse_static_frames", True)
+            ),
+            saliency_minmax_normalize_output=bool(
+                self.config.get("saliency_minmax_normalize_output", True)
+            ),
             enable_motion=bool(self.config.get("enable_motion", False)),
             motion_diff_threshold=int(
                 self.config.get("motion_diff_threshold", 25)

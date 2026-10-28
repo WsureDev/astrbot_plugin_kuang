@@ -80,6 +80,12 @@ class EspBoxDetector:
         saliency_threshold: float = 0.5,
         saliency_min_area_ratio: float = 0.005,
         saliency_max_boxes: int = 8,
+        saliency_max_foreground_ratio: float = 0.92,
+        saliency_preserve_aspect_ratio: bool = False,
+        saliency_intra_op_num_threads: int = 0,
+        saliency_inter_op_num_threads: int = 0,
+        saliency_reuse_static_frames: bool = True,
+        saliency_minmax_normalize_output: bool = True,
         enable_motion: bool = False,
         motion_diff_threshold: int = 25,
         motion_min_area_ratio: float = 0.005,
@@ -133,7 +139,12 @@ class EspBoxDetector:
         )
 
         self.enable_saliency = bool(enable_saliency)
+        self.saliency_reuse_static_frames = bool(saliency_reuse_static_frames)
         self._saliency_backend: SaliencyDetectionBackend | None = None
+        self._saliency_cache_boxes: list[DetectionBox] = []
+        self._saliency_cache_frame_shape: tuple[int, ...] | None = None
+        self._saliency_cache_frame = None
+        self._saliency_cache_valid = False
         if self.enable_saliency:
             self._saliency_backend = SaliencyDetectionBackend(
                 model_path=saliency_model_path,
@@ -143,13 +154,19 @@ class EspBoxDetector:
                 binary_threshold=saliency_threshold,
                 min_area_ratio=saliency_min_area_ratio,
                 max_boxes=saliency_max_boxes,
+                max_foreground_ratio=saliency_max_foreground_ratio,
+                preserve_aspect_ratio=saliency_preserve_aspect_ratio,
+                intra_op_num_threads=saliency_intra_op_num_threads,
+                inter_op_num_threads=saliency_inter_op_num_threads,
+                minmax_normalize_output=saliency_minmax_normalize_output,
             )
             _logger.info(
-                "[detector] saliency stage3 enabled: model_path=%s auto_download=%s input=%s threshold=%.3f",
+                "[detector] saliency stage3 enabled: model_path=%s auto_download=%s input=%s threshold=%.3f reuse_static=%s",
                 saliency_model_path or "<default>",
                 saliency_auto_download_model,
                 saliency_model_input_size,
                 saliency_threshold,
+                self.saliency_reuse_static_frames,
             )
         else:
             _logger.debug("[detector] saliency stage3 disabled")
@@ -208,8 +225,12 @@ class EspBoxDetector:
         stage1_boxes = self._run_stage1(image_rgb)
         stage2_boxes = self._run_stage2(image_rgb, stage1_boxes)
         stage2_composite_boxes = self._arranger.compose_anime_boxes(stage2_boxes)
-        stage3_boxes = self._run_stage3(image_rgb)
         stage4_boxes = self._run_stage4(image_rgb, previous_frame_rgb)
+        stage3_boxes = self._run_stage3(
+            image_rgb,
+            previous_frame_rgb=previous_frame_rgb,
+            motion_boxes=stage4_boxes,
+        )
         arranged_boxes = self._arranger.arrange(
             stage1_boxes=stage1_boxes,
             stage2_boxes=stage2_boxes,
@@ -403,15 +424,56 @@ class EspBoxDetector:
             )
         return [self._annotate_stage_box(item, stage_name) for item in limited]
 
-    def _run_stage3(self, image_rgb) -> list[DetectionBox]:
+    def _run_stage3(
+        self,
+        image_rgb,
+        *,
+        previous_frame_rgb=None,
+        motion_boxes: list[DetectionBox] | None = None,
+    ) -> list[DetectionBox]:
         if not self.enable_saliency or self._saliency_backend is None:
+            self._saliency_cache_boxes = []
+            self._saliency_cache_frame_shape = None
+            self._saliency_cache_frame = None
+            self._saliency_cache_valid = False
             return []
+
+        image_shape = tuple(getattr(image_rgb, "shape", ()) or ())
+        previous_shape = tuple(getattr(previous_frame_rgb, "shape", ()) or ())
+        can_reuse = bool(
+            self.saliency_reuse_static_frames
+            and self.enable_saliency
+            and self._saliency_cache_valid
+            and previous_frame_rgb is not None
+            and image_shape
+            and image_shape == previous_shape
+            and image_shape == self._saliency_cache_frame_shape
+            and self._saliency_cache_matches_previous(previous_frame_rgb)
+        )
+        if can_reuse:
+            if self.enable_motion:
+                can_reuse = not motion_boxes
+            else:
+                can_reuse = self._frames_equal(image_rgb, previous_frame_rgb)
+        if can_reuse:
+            _logger.debug(
+                "[detector] stage3 saliency reused cached boxes: shape=%s boxes=%s",
+                image_shape,
+                len(self._saliency_cache_boxes),
+            )
+            self._saliency_cache_frame = image_rgb
+            return list(self._saliency_cache_boxes)
+
         try:
             detections = self._saliency_backend.detect(image_rgb)
         except Exception:
             _logger.exception(
                 "[detector] stage3 saliency detection failed, skipping"
             )
+            self._saliency_cache_boxes = []
+            self._saliency_cache_frame_shape = None
+            self._saliency_cache_frame = None
+            self._saliency_cache_valid = False
             return []
         limited = list(detections)[: self._candidate_limit]
         if len(limited) < len(detections):
@@ -425,7 +487,36 @@ class EspBoxDetector:
             len(limited),
             self._summarize_detections(limited),
         )
+        if self.saliency_reuse_static_frames:
+            self._saliency_cache_boxes = list(limited)
+            self._saliency_cache_frame_shape = image_shape or None
+            self._saliency_cache_frame = image_rgb
+            self._saliency_cache_valid = True
+        else:
+            self._saliency_cache_boxes = []
+            self._saliency_cache_frame_shape = None
+            self._saliency_cache_frame = None
+            self._saliency_cache_valid = False
         return limited
+
+    def _saliency_cache_matches_previous(self, previous_frame_rgb) -> bool:
+        """Avoid reusing boxes from an unrelated concurrent image stream."""
+        if previous_frame_rgb is self._saliency_cache_frame:
+            return True
+        if self._saliency_cache_frame is None:
+            return False
+        return self._frames_equal(previous_frame_rgb, self._saliency_cache_frame)
+
+    def _frames_equal(self, left, right) -> bool:
+        """Compare frame arrays without making cache failures fatal."""
+        try:
+            np = self._load_numpy()
+        except (ImportError, RuntimeError):
+            return False
+        try:
+            return bool(np.array_equal(left, right))
+        except (ImportError, RuntimeError, AttributeError, TypeError, ValueError):
+            return False
 
     def _run_stage4(
         self,

@@ -155,6 +155,42 @@
     "type": "int",
     "default": 8
   },
+  "saliency_max_foreground_ratio": {
+    "description": "显著性 mask 最大前景占比",
+    "hint": "默认 0.92。若超过约 92% 的图像都被判为前景，通常是模型不确定或背景误检，将跳过该 mask。",
+    "type": "float",
+    "default": 0.92
+  },
+  "saliency_preserve_aspect_ratio": {
+    "description": "显著性预处理保持原图长宽比",
+    "hint": "默认关闭以保持 U²-Net-p 原有 320×320 预处理；开启后会在模型输入中加黑边并在输出时裁回。",
+    "type": "bool",
+    "default": false
+  },
+  "saliency_intra_op_num_threads": {
+    "description": "显著性 ORT 算子线程数",
+    "hint": "默认 0 由 ONNX Runtime 自动选择；设置为 1 可降低并发时内存峰值，但可能牺牲单次速度。",
+    "type": "int",
+    "default": 0
+  },
+  "saliency_inter_op_num_threads": {
+    "description": "显著性 ORT 算子间线程数",
+    "hint": "默认 0 由 ONNX Runtime 自动选择；通常无需修改。",
+    "type": "int",
+    "default": 0
+  },
+  "saliency_reuse_static_frames": {
+    "description": "GIF 静止帧复用显著性结果",
+    "hint": "默认开启。启用运动检测时，未检测到运动的相邻帧会复用上一帧显著性框；关闭后每帧重新推理。",
+    "type": "bool",
+    "default": true
+  },
+  "saliency_minmax_normalize_output": {
+    "description": "显著性输出做逐图 min-max 归一化",
+    "hint": "默认开启以兼容 U²-Net-p/rembg 后处理；关闭后保留模型原始概率，适合已做概率校准的模型。",
+    "type": "bool",
+    "default": true
+  },
   "enable_motion": {
     "description": "启用运动检测（阶段4，仅 GIF）",
     "hint": "默认关闭。开启后 GIF 会用帧差捕捉移动物体，静态图片不受影响。",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as _datetime
 import shutil
+import threading
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,11 @@ class SaliencyDetectionBackend:
         min_area_ratio: float = 0.005,
         max_boxes: int = 8,
         edge_padding_ratio: float = 0.01,
+        max_foreground_ratio: float = 0.92,
+        preserve_aspect_ratio: bool = False,
+        intra_op_num_threads: int = 0,
+        inter_op_num_threads: int = 0,
+        minmax_normalize_output: bool = True,
     ) -> None:
         resolved_model_path = str(model_path or "").strip()
         if not resolved_model_path:
@@ -57,6 +63,17 @@ class SaliencyDetectionBackend:
         self.min_area_ratio = max(0.0, float(min_area_ratio))
         self.max_boxes = max(1, int(max_boxes))
         self.edge_padding_ratio = max(0.0, float(edge_padding_ratio))
+        self.max_foreground_ratio = max(
+            0.0,
+            min(1.0, float(max_foreground_ratio)),
+        )
+        self.preserve_aspect_ratio = bool(preserve_aspect_ratio)
+        self.intra_op_num_threads = max(0, int(intra_op_num_threads))
+        self.inter_op_num_threads = max(0, int(inter_op_num_threads))
+        # Keep the rembg/U²-Net-p post-processing contract by default.  It
+        # stretches each per-image mask to [0, 1]; disabling it is useful for
+        # calibrating models that already emit well-calibrated probabilities.
+        self.minmax_normalize_output = bool(minmax_normalize_output)
         self._np: Any | None = None
         self._ort: Any | None = None
         self._session: Any | None = None
@@ -65,9 +82,22 @@ class SaliencyDetectionBackend:
             self.model_input_size,
             self.model_input_size,
         )
+        # ONNX Runtime can allocate a large activation arena for U²-Net-p.
+        # Serializing inference per backend prevents concurrent requests from
+        # multiplying that peak RSS.  RLock also protects the input transform
+        # used by optional aspect-ratio-preserving preprocessing.
+        self._inference_lock = threading.RLock()
+        self._last_input_transform: tuple[int, int, int, int] = (
+            0,
+            0,
+            self.model_input_size,
+            self.model_input_size,
+        )
         _logger.debug(
             "[%s] backend init: model_path=%s auto_download=%s model_url=%s"
-            " threshold=%.3f min_area_ratio=%.4f max_boxes=%s input_size=%s",
+            " threshold=%.3f min_area_ratio=%.4f max_boxes=%s input_size=%s"
+            " max_foreground_ratio=%.3f preserve_aspect=%s intra_threads=%s"
+            " inter_threads=%s minmax_normalize=%s",
             self.source_name,
             self.model_path,
             self.auto_download_model,
@@ -76,77 +106,110 @@ class SaliencyDetectionBackend:
             self.min_area_ratio,
             self.max_boxes,
             self._input_size,
+            self.max_foreground_ratio,
+            self.preserve_aspect_ratio,
+            self.intra_op_num_threads,
+            self.inter_op_num_threads,
+            self.minmax_normalize_output,
         )
 
     # -- public API -------------------------------------------------------
 
     def detect(self, image_rgb) -> list[DetectionBox]:
-        image_height, image_width = image_rgb.shape[:2]
-        raw = self._infer(image_rgb)
-        mask_probability = self._normalize_mask(raw)
-        binary_mask = mask_probability >= self.binary_threshold
-        components = self._extract_connected_components(binary_mask)
-        _logger.debug(
-            "[%s] mask stats: image=%sx%s mask_shape=%s max_prob=%.3f mean_prob=%.3f components=%s",
-            self.source_name,
-            image_width,
-            image_height,
-            binary_mask.shape,
-            float(mask_probability.max()) if mask_probability.size else 0.0,
-            float(mask_probability.mean()) if mask_probability.size else 0.0,
-            len(components),
-        )
-
-        mask_height, mask_width = binary_mask.shape
-        scale_x = image_width / max(1, mask_width)
-        scale_y = image_height / max(1, mask_height)
-        min_area_px = max(1, int(mask_height * mask_width * self.min_area_ratio))
-        pad_x = int(round(image_width * self.edge_padding_ratio))
-        pad_y = int(round(image_height * self.edge_padding_ratio))
-
-        boxes: list[DetectionBox] = []
-        for component in components:
-            min_x, min_y, max_x, max_y, area = component
-            if area < min_area_px:
-                continue
-            x1 = int(round(min_x * scale_x)) - pad_x
-            y1 = int(round(min_y * scale_y)) - pad_y
-            x2 = int(round((max_x + 1) * scale_x)) + pad_x
-            y2 = int(round((max_y + 1) * scale_y)) + pad_y
-            x1 = max(0, min(image_width, x1))
-            y1 = max(0, min(image_height, y1))
-            x2 = max(0, min(image_width, x2))
-            y2 = max(0, min(image_height, y2))
-            if x2 <= x1 or y2 <= y1:
-                continue
-            score = float(area / max(1, mask_height * mask_width))
-            boxes.append(
-                DetectionBox(
-                    x1=x1,
-                    y1=y1,
-                    x2=x2,
-                    y2=y2,
-                    score=score,
-                    category="salient",
-                    priority=0,
-                    source=self.source_name,
-                    stage="stage3_salient",
-                    part="salient",
-                    semantic_role="salient",
+        # Keep inference, transform capture, and mask restoration under the
+        # same lock.  A concurrent call could otherwise overwrite
+        # ``_last_input_transform`` between _infer() and post-processing.
+        with self._inference_lock:
+            image_height, image_width = image_rgb.shape[:2]
+            raw = self._infer(image_rgb)
+            mask_probability = self._normalize_mask(raw)
+            if self.preserve_aspect_ratio:
+                mask_probability = self._restore_mask_to_image(
+                    mask_probability,
+                    image_width=image_width,
+                    image_height=image_height,
                 )
+            if not mask_probability.size:
+                _logger.debug("[%s] empty saliency mask, skipping", self.source_name)
+                return []
+
+            binary_mask = mask_probability >= self.binary_threshold
+            foreground_ratio = float(binary_mask.mean())
+            if foreground_ratio >= self.max_foreground_ratio:
+                # A nearly full-frame mask is more often a failed/uncertain
+                # prediction than a useful subject box.  Returning no box
+                # lets the arranger fall back to other stages/random boxes.
+                _logger.debug(
+                    "[%s] foreground mask rejected as full-frame: ratio=%.4f limit=%.4f",
+                    self.source_name,
+                    foreground_ratio,
+                    self.max_foreground_ratio,
+                )
+                return []
+
+            components = self._extract_connected_components(binary_mask)
+            _logger.debug(
+                "[%s] mask stats: image=%sx%s mask_shape=%s max_prob=%.3f mean_prob=%.3f foreground_ratio=%.4f components=%s",
+                self.source_name,
+                image_width,
+                image_height,
+                binary_mask.shape,
+                float(mask_probability.max()) if mask_probability.size else 0.0,
+                float(mask_probability.mean()) if mask_probability.size else 0.0,
+                foreground_ratio,
+                len(components),
             )
 
-        # 面积大者优先，只保留前 max_boxes 个
-        boxes.sort(key=lambda item: -item.area)
-        limited = boxes[: self.max_boxes]
-        _logger.debug(
-            "[%s] detect: raw_components=%s kept=%s dropped=%s",
-            self.source_name,
-            len(components),
-            len(limited),
-            len(boxes) - len(limited),
-        )
-        return limited
+            mask_height, mask_width = binary_mask.shape
+            scale_x = image_width / max(1, mask_width)
+            scale_y = image_height / max(1, mask_height)
+            min_area_px = max(1, int(mask_height * mask_width * self.min_area_ratio))
+            pad_x = int(round(image_width * self.edge_padding_ratio))
+            pad_y = int(round(image_height * self.edge_padding_ratio))
+
+            boxes: list[DetectionBox] = []
+            for component in components:
+                min_x, min_y, max_x, max_y, area = component
+                if area < min_area_px:
+                    continue
+                x1 = int(round(min_x * scale_x)) - pad_x
+                y1 = int(round(min_y * scale_y)) - pad_y
+                x2 = int(round((max_x + 1) * scale_x)) + pad_x
+                y2 = int(round((max_y + 1) * scale_y)) + pad_y
+                x1 = max(0, min(image_width, x1))
+                y1 = max(0, min(image_height, y1))
+                x2 = max(0, min(image_width, x2))
+                y2 = max(0, min(image_height, y2))
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                score = float(area / max(1, mask_height * mask_width))
+                boxes.append(
+                    DetectionBox(
+                        x1=x1,
+                        y1=y1,
+                        x2=x2,
+                        y2=y2,
+                        score=score,
+                        category="salient",
+                        priority=0,
+                        source=self.source_name,
+                        stage="stage3_salient",
+                        part="salient",
+                        semantic_role="salient",
+                    )
+                )
+
+            # 面积大者优先，只保留前 max_boxes 个
+            boxes.sort(key=lambda item: (-item.score, -item.area))
+            limited = boxes[: self.max_boxes]
+            _logger.debug(
+                "[%s] detect: raw_components=%s kept=%s dropped=%s",
+                self.source_name,
+                len(components),
+                len(limited),
+                len(boxes) - len(limited),
+            )
+            return limited
 
     def load_numpy(self):
         if self._np is None:
@@ -160,27 +223,28 @@ class SaliencyDetectionBackend:
     # -- inference --------------------------------------------------------
 
     def _infer(self, image_rgb):
-        np = self.load_numpy()
-        session = self._get_session()
-        tensor = self._prepare_input(image_rgb)
-        _logger.debug(
-            "[%s] infer: tensor_shape=%s input_name=%s",
-            self.source_name,
-            tuple(tensor.shape),
-            self._input_name,
-        )
-        outputs = session.run(None, {self._input_name: tensor})
-        if not outputs:
-            raise RuntimeError(f"{self.source_name} ONNX 推理未返回任何输出。")
-        raw = np.asarray(outputs[0])
-        _logger.debug(
-            "[%s] infer done: outputs=%s primary_shape=%s dtype=%s",
-            self.source_name,
-            len(outputs),
-            tuple(raw.shape),
-            raw.dtype,
-        )
-        return raw
+        with self._inference_lock:
+            np = self.load_numpy()
+            session = self._get_session()
+            tensor = self._prepare_input(image_rgb)
+            _logger.debug(
+                "[%s] infer: tensor_shape=%s input_name=%s",
+                self.source_name,
+                tuple(tensor.shape),
+                self._input_name,
+            )
+            outputs = session.run(None, {self._input_name: tensor})
+            if not outputs:
+                raise RuntimeError(f"{self.source_name} ONNX 推理未返回任何输出。")
+            raw = np.asarray(outputs[0])
+            _logger.debug(
+                "[%s] infer done: outputs=%s primary_shape=%s dtype=%s",
+                self.source_name,
+                len(outputs),
+                tuple(raw.shape),
+                raw.dtype,
+            )
+            return raw
 
     def _prepare_input(self, image_rgb):
         np = self.load_numpy()
@@ -190,10 +254,35 @@ class SaliencyDetectionBackend:
             raise RuntimeError("缺少 Pillow 依赖，请先安装 requirements.txt。") from exc
 
         input_width, input_height = self._input_size
-        resized = Image.fromarray(image_rgb).resize(
-            (input_width, input_height),
-            Image.BILINEAR,
-        )
+        if self.preserve_aspect_ratio:
+            image_height, image_width = image_rgb.shape[:2]
+            scale = min(
+                input_width / max(1, image_width),
+                input_height / max(1, image_height),
+            )
+            resized_width = max(1, round(image_width * scale))
+            resized_height = max(1, round(image_height * scale))
+            resized = Image.fromarray(image_rgb).resize(
+                (resized_width, resized_height),
+                Image.BILINEAR,
+            )
+            canvas = Image.new("RGB", (input_width, input_height), (0, 0, 0))
+            offset_x = (input_width - resized_width) // 2
+            offset_y = (input_height - resized_height) // 2
+            canvas.paste(resized, (offset_x, offset_y))
+            resized = canvas
+            self._last_input_transform = (
+                offset_x,
+                offset_y,
+                resized_width,
+                resized_height,
+            )
+        else:
+            resized = Image.fromarray(image_rgb).resize(
+                (input_width, input_height),
+                Image.BILINEAR,
+            )
+            self._last_input_transform = (0, 0, input_width, input_height)
         tensor = np.asarray(resized).astype(np.float32) / 255.0
         mean = np.asarray(_IMAGENET_MEAN, dtype=np.float32).reshape(1, 1, 3)
         std = np.asarray(_IMAGENET_STD, dtype=np.float32).reshape(1, 1, 3)
@@ -203,18 +292,74 @@ class SaliencyDetectionBackend:
 
     def _normalize_mask(self, raw):
         np = self.load_numpy()
-        mask = raw
+        mask = np.asarray(raw)
+        if not mask.size:
+            return np.zeros((0, 0), dtype=np.float32)
         # 常见形状是 (1, 1, H, W)、(1, H, W) 或 (H, W)
         while mask.ndim > 2:
             mask = mask[0]
+        if mask.ndim != 2:
+            return np.zeros((0, 0), dtype=np.float32)
+        mask = mask.astype(np.float32, copy=False)
+        mask = np.nan_to_num(mask, nan=0.0, posinf=1.0, neginf=0.0)
         # 部分导出的模型输出未经 sigmoid，取值范围可能超出 [0,1]
         if mask.max() > 1.0 or mask.min() < 0.0:
             mask = 1.0 / (1.0 + np.exp(-mask))
-        mask_min = float(mask.min())
-        mask_max = float(mask.max())
-        if mask_max - mask_min > 1e-6:
-            mask = (mask - mask_min) / (mask_max - mask_min)
-        return mask
+        if self.minmax_normalize_output:
+            mask_min = float(mask.min())
+            mask_max = float(mask.max())
+            if mask_max - mask_min > 1e-6:
+                mask = (mask - mask_min) / (mask_max - mask_min)
+        return np.clip(mask, 0.0, 1.0)
+
+    def _restore_mask_to_image(
+        self,
+        mask,
+        *,
+        image_width: int,
+        image_height: int,
+    ):
+        """Remove letterbox padding and resize a mask to image coordinates."""
+        np = self.load_numpy()
+        if not mask.size:
+            return mask
+        mask_height, mask_width = mask.shape
+        input_width, input_height = self._input_size
+        offset_x, offset_y, resized_width, resized_height = (
+            self._last_input_transform
+        )
+        # The output mask can differ from the input tensor resolution.  Map
+        # the recorded input-space transform into output-mask coordinates.
+        scale_mask_x = mask_width / max(1, input_width)
+        scale_mask_y = mask_height / max(1, input_height)
+        crop_x1 = max(0, round(offset_x * scale_mask_x))
+        crop_y1 = max(0, round(offset_y * scale_mask_y))
+        crop_x2 = min(
+            mask_width,
+            max(crop_x1 + 1, round((offset_x + resized_width) * scale_mask_x)),
+        )
+        crop_y2 = min(
+            mask_height,
+            max(crop_y1 + 1, round((offset_y + resized_height) * scale_mask_y)),
+        )
+        cropped = mask[crop_y1:crop_y2, crop_x1:crop_x2]
+        if not cropped.size:
+            cropped = mask
+        if cropped.shape != (image_height, image_width):
+            try:
+                from PIL import Image
+            except ImportError as exc:
+                raise RuntimeError(
+                    "缺少 Pillow 依赖，请先安装 requirements.txt。"
+                ) from exc
+            cropped = np.asarray(
+                Image.fromarray(cropped.astype(np.float32), mode="F").resize(
+                    (image_width, image_height),
+                    Image.BILINEAR,
+                ),
+                dtype=np.float32,
+            )
+        return np.clip(cropped, 0.0, 1.0)
 
     def _extract_connected_components(
         self,
@@ -232,9 +377,11 @@ class SaliencyDetectionBackend:
         fg_count = int(mask.sum())
         if fg_count == 0:
             return []
-        # 前景占比 > 92% 时直接把整块当成一个大目标返回，节省 BFS 成本
-        if fg_count / max(1, total) > 0.92:
-            return [(0, 0, width - 1, height - 1, fg_count)]
+        # Keep the component extractor safe when called directly as well as
+        # through detect().  A nearly full-frame mask is treated as an
+        # uncertain prediction instead of producing a useless whole-image box.
+        if fg_count / max(1, total) >= self.max_foreground_ratio:
+            return []
 
         components: list[tuple[int, int, int, int, int]] = []
         # 直接把 mask 做 list-of-list，避免 numpy 单像素读写在 Python 循环里的开销
@@ -372,10 +519,7 @@ class SaliencyDetectionBackend:
 
     def _create_session_with_recovery(self, ort, model_path: Path):
         try:
-            return ort.InferenceSession(
-                str(model_path),
-                providers=["CPUExecutionProvider"],
-            )
+            return self._create_session(ort, model_path)
         except Exception as exc:
             file_size = self._safe_file_size(model_path)
             _logger.warning(
@@ -397,16 +541,35 @@ class SaliencyDetectionBackend:
             )
             refreshed_model_path = self._ensure_model_file()
             try:
-                return ort.InferenceSession(
-                    str(refreshed_model_path),
-                    providers=["CPUExecutionProvider"],
-                )
+                return self._create_session(ort, refreshed_model_path)
             except Exception as retry_exc:
                 retry_size = self._safe_file_size(refreshed_model_path)
                 raise RuntimeError(
                     f"{self.source_name} ONNX 模型加载失败，已重下 1 次仍不可用: "
                     f"path={refreshed_model_path} size={retry_size} error={retry_exc}"
                 ) from retry_exc
+
+    def _create_session(self, ort, model_path: Path):
+        """Create an ORT session with explicit, optionally tuned settings."""
+        session_options = self._create_session_options(ort)
+        return ort.InferenceSession(
+            str(model_path),
+            sess_options=session_options,
+            providers=["CPUExecutionProvider"],
+        )
+
+    def _create_session_options(self, ort):
+        """Build session options without changing ORT defaults unexpectedly."""
+        session_options = ort.SessionOptions()
+        graph_optimization_level = getattr(ort, "GraphOptimizationLevel", None)
+        optimize_all = getattr(graph_optimization_level, "ORT_ENABLE_ALL", None)
+        if optimize_all is not None:
+            session_options.graph_optimization_level = optimize_all
+        if self.intra_op_num_threads > 0:
+            session_options.intra_op_num_threads = self.intra_op_num_threads
+        if self.inter_op_num_threads > 0:
+            session_options.inter_op_num_threads = self.inter_op_num_threads
+        return session_options
 
     def _should_retry_model_load(self, exc: Exception) -> bool:
         if not self.auto_download_model or not self.model_url:
