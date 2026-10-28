@@ -4,9 +4,9 @@ from core.models import DetectionBox, DetectionPipelineResult
 
 
 class DetectionModelTests(unittest.TestCase):
-    def test_legacy_pipeline_result_positional_constructor(self):
-        result = DetectionPipelineResult([], [], [], [], [], [])
-        another = DetectionPipelineResult([], [], [], [], [], [])
+    def test_pipeline_result_default_lists_are_independent(self):
+        result = DetectionPipelineResult([], [], [], [], [])
+        another = DetectionPipelineResult([], [], [], [], [])
 
         self.assertEqual(result.stage3_boxes, [])
         self.assertEqual(result.stage4_boxes, [])

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as _datetime
 import shutil
+import threading
 from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
@@ -14,9 +15,7 @@ _logger = get_logger(__name__)
 DEFAULT_YOLO26N_MODEL_URL = (
     "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.onnx"
 )
-DEFAULT_ANIME_YOLO_MODEL_URL = (
-    "https://huggingface.co/laowanglaowang/yolov11m_anime_Image_segmentation/resolve/main/best.onnx"
-)
+DEFAULT_ANIME_YOLO_MODEL_URL = "https://huggingface.co/laowanglaowang/yolov11m_anime_Image_segmentation/resolve/main/best.onnx"
 
 _COCO_CLASS_NAMES = [
     "person",
@@ -129,6 +128,7 @@ class BaseYoloOnnxDetectionBackend:
         confidence_threshold: float = 0.25,
         nms_iou_threshold: float = 0.45,
         model_input_size: int = 640,
+        intra_op_num_threads: int = 0,
     ) -> None:
         resolved_model_path = str(model_path or "").strip()
         if not resolved_model_path:
@@ -142,6 +142,9 @@ class BaseYoloOnnxDetectionBackend:
         self.confidence_threshold = max(0.0, float(confidence_threshold))
         self.nms_iou_threshold = float(nms_iou_threshold)
         self.model_input_size = max(64, int(model_input_size))
+        self.intra_op_num_threads = max(0, int(intra_op_num_threads))
+        self._session_lock = threading.RLock()
+        self._processed_output = False
         self._np: Any | None = None
         self._ort: Any | None = None
         self._session: Any | None = None
@@ -199,7 +202,9 @@ class BaseYoloOnnxDetectionBackend:
             try:
                 import numpy as np
             except ImportError as exc:
-                raise RuntimeError("缺少 NumPy 依赖，请先安装 requirements.txt。") from exc
+                raise RuntimeError(
+                    "缺少 NumPy 依赖，请先安装 requirements.txt。"
+                ) from exc
             self._np = np
         return self._np
 
@@ -255,9 +260,10 @@ class BaseYoloOnnxDetectionBackend:
             self.model_path,
         )
         try:
-            with urlopen(self.model_url, timeout=60) as response, temp_path.open(
-                "wb"
-            ) as file_obj:
+            with (
+                urlopen(self.model_url, timeout=60) as response,
+                temp_path.open("wb") as file_obj,
+            ):
                 shutil.copyfileobj(response, file_obj)
             temp_path.replace(self.model_path)
             _logger.info(
@@ -282,35 +288,34 @@ class BaseYoloOnnxDetectionBackend:
         return self.model_path
 
     def _get_session(self):
-        if self._session is not None:
+        with self._session_lock:
+            if self._session is not None:
+                return self._session
+            ort = self._load_onnxruntime()
+            model_path = self._ensure_model_file()
+            session = self._create_session_with_recovery(ort, model_path)
+
+            input_meta = session.get_inputs()
+            if not input_meta:
+                raise RuntimeError(f"{self.source_name} ONNX 模型未暴露输入张量。")
+
+            self._input_name = input_meta[0].name
+            self._input_size = self._resolve_input_size(input_meta[0].shape)
+            shape = session.get_outputs()[0].shape
+            self._processed_output = len(shape) == 3 and shape[-1] == 6
+            self._session = session
+            _logger.info(
+                "[%s] model session ready: path=%s input_name=%s input_size=%s",
+                self.source_name,
+                model_path,
+                self._input_name,
+                self._input_size,
+            )
             return self._session
-
-        ort = self._load_onnxruntime()
-        model_path = self._ensure_model_file()
-        session = self._create_session_with_recovery(ort, model_path)
-
-        input_meta = session.get_inputs()
-        if not input_meta:
-            raise RuntimeError(f"{self.source_name} ONNX 模型未暴露输入张量。")
-
-        self._session = session
-        self._input_name = input_meta[0].name
-        self._input_size = self._resolve_input_size(input_meta[0].shape)
-        _logger.info(
-            "[%s] model session ready: path=%s input_name=%s input_size=%s",
-            self.source_name,
-            model_path,
-            self._input_name,
-            self._input_size,
-        )
-        return self._session
 
     def _create_session_with_recovery(self, ort, model_path: Path):
         try:
-            return ort.InferenceSession(
-                str(model_path),
-                providers=["CPUExecutionProvider"],
-            )
+            return self._create_session(ort, model_path)
         except Exception as exc:
             file_size = self._safe_file_size(model_path)
             _logger.warning(
@@ -321,7 +326,9 @@ class BaseYoloOnnxDetectionBackend:
                 exc,
             )
             if not self._should_retry_model_load(exc):
-                raise RuntimeError(f"{self.source_name} ONNX 模型加载失败: {exc}") from exc
+                raise RuntimeError(
+                    f"{self.source_name} ONNX 模型加载失败: {exc}"
+                ) from exc
 
             backup_path = self._backup_invalid_model_file(model_path)
             _logger.warning(
@@ -331,16 +338,20 @@ class BaseYoloOnnxDetectionBackend:
             )
             refreshed_model_path = self._ensure_model_file()
             try:
-                return ort.InferenceSession(
-                    str(refreshed_model_path),
-                    providers=["CPUExecutionProvider"],
-                )
+                return self._create_session(ort, refreshed_model_path)
             except Exception as retry_exc:
                 retry_size = self._safe_file_size(refreshed_model_path)
                 raise RuntimeError(
                     f"{self.source_name} ONNX 模型加载失败，已重下 1 次仍不可用: "
                     f"path={refreshed_model_path} size={retry_size} error={retry_exc}"
                 ) from retry_exc
+
+    def _create_session(self, ort, path):
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = self.intra_op_num_threads
+        return ort.InferenceSession(
+            str(path), sess_options=options, providers=["CPUExecutionProvider"]
+        )
 
     def _should_retry_model_load(self, exc: Exception) -> bool:
         if not self.auto_download_model or not self.model_url:
@@ -383,7 +394,9 @@ class BaseYoloOnnxDetectionBackend:
         except OSError:
             return -1
 
-    def _resolve_input_size(self, shape: list[Any] | tuple[Any, ...]) -> tuple[int, int]:
+    def _resolve_input_size(
+        self, shape: list[Any] | tuple[Any, ...]
+    ) -> tuple[int, int]:
         height = self.model_input_size
         width = self.model_input_size
         if len(shape) >= 4:
@@ -464,49 +477,62 @@ class BaseYoloOnnxDetectionBackend:
             raise RuntimeError(
                 f"{self.source_name} 输出形状不受支持: {tuple(predictions.shape)}"
             )
-        if predictions.shape[0] < predictions.shape[1]:
+        feature_count = 4 + len(self.class_names)
+        # Recognize the contract, not the relative lengths of the axes.
+        # In particular, (1, 1..5, 6) is already a list of xyxy detections.
+        if predictions.shape[1] == 6:
+            processed = True
+        elif predictions.shape[0] == feature_count:
             predictions = predictions.T
-
+            processed = False
+        elif predictions.shape[1] == feature_count:
+            processed = False
+        elif predictions.shape[0] == 6:
+            predictions = predictions.T
+            processed = True
+        else:
+            raise RuntimeError(
+                f"{self.source_name} 输出与类别表不匹配: {predictions.shape}"
+            )
+        predictions = predictions.astype(np.float32, copy=False)
+        if not len(predictions):
+            return []
+        if processed:
+            coordinates = predictions[:, :4].copy()
+            scores = predictions[:, 4]
+            classes = predictions[:, 5]
+        else:
+            class_scores = predictions[:, 4 : 4 + len(self.class_names)]
+            classes = np.argmax(class_scores, axis=1)
+            scores = class_scores[np.arange(len(predictions)), classes]
+            centers, sizes = predictions[:, :2], predictions[:, 2:4]
+            coordinates = np.concatenate(
+                (centers - sizes / 2, centers + sizes / 2), axis=1
+            )
+        valid = (
+            np.isfinite(coordinates).all(axis=1)
+            & np.isfinite(scores)
+            & np.isfinite(classes)
+            & (scores >= self.confidence_threshold)
+            & (classes >= 0)
+            & (classes < len(self.class_names))
+            & (classes == np.floor(classes))
+        )
+        coordinates = coordinates[valid]
+        scores, classes = scores[valid], classes[valid].astype(np.int64)
+        coordinates[:, [0, 2]] = (coordinates[:, [0, 2]] - pad_x) / scale
+        coordinates[:, [1, 3]] = (coordinates[:, [1, 3]] - pad_y) / scale
+        coordinates = np.rint(coordinates)
+        coordinates[:, [0, 2]] = np.clip(coordinates[:, [0, 2]], 0, image_width)
+        coordinates[:, [1, 3]] = np.clip(coordinates[:, [1, 3]], 0, image_height)
         detections: list[DetectionBox] = []
-        for row in predictions:
-            row = np.asarray(row).astype(np.float32).reshape(-1)
-            if row.size < 6:
-                continue
-
-            if row.size == 7 and abs(row[0]) < 1e-6:
-                row = row[1:]
-
-            if row.size == 6:
-                x1, y1, x2, y2, score, class_id = row.tolist()
-                class_id = int(class_id)
-            else:
-                class_scores = row[4:]
-                class_id = int(np.argmax(class_scores))
-                score = float(class_scores[class_id])
-                if class_id < 0 or class_id >= len(class_scores):
-                    continue
-                center_x, center_y, box_width, box_height = row[:4].tolist()
-                x1 = center_x - (box_width / 2.0)
-                y1 = center_y - (box_height / 2.0)
-                x2 = center_x + (box_width / 2.0)
-                y2 = center_y + (box_height / 2.0)
-
-            if score < self.confidence_threshold:
-                continue
-
-            x1 = (x1 - pad_x) / scale
-            y1 = (y1 - pad_y) / scale
-            x2 = (x2 - pad_x) / scale
-            y2 = (y2 - pad_y) / scale
-
-            x1 = max(0, min(image_width, int(round(x1))))
-            y1 = max(0, min(image_height, int(round(y1))))
-            x2 = max(0, min(image_width, int(round(x2))))
-            y2 = max(0, min(image_height, int(round(y2))))
+        for coords, score, class_id in zip(
+            coordinates.astype(np.int64), scores, classes
+        ):
+            x1, y1, x2, y2 = map(int, coords)
             if x2 <= x1 or y2 <= y1:
                 continue
-
-            label = self._label_for_class_id(class_id)
+            label = self._label_for_class_id(int(class_id))
             detections.append(
                 DetectionBox(
                     x1=x1,
@@ -540,6 +566,8 @@ class BaseYoloOnnxDetectionBackend:
             key=lambda item: (item.priority, -item.score, -item.area),
         )
 
+        if self._processed_output:
+            return ordered
         selected: list[DetectionBox] = []
         for candidate in ordered:
             if candidate.area <= 0:

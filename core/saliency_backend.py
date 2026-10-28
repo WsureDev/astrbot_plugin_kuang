@@ -3,13 +3,13 @@ from __future__ import annotations
 import datetime as _datetime
 import shutil
 import threading
-from collections import deque
 from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
 
 from .logger import get_logger
 from .models import DetectionBox
+from .mask_utils import connected_components
 
 _logger = get_logger(__name__)
 
@@ -43,7 +43,7 @@ class SaliencyDetectionBackend:
         min_area_ratio: float = 0.005,
         max_boxes: int = 8,
         edge_padding_ratio: float = 0.01,
-        max_foreground_ratio: float = 0.92,
+        max_foreground_ratio: float = 0.995,
         preserve_aspect_ratio: bool = False,
         intra_op_num_threads: int = 0,
         inter_op_num_threads: int = 0,
@@ -138,7 +138,7 @@ class SaliencyDetectionBackend:
             if foreground_ratio >= self.max_foreground_ratio:
                 # A nearly full-frame mask is more often a failed/uncertain
                 # prediction than a useful subject box.  Returning no box
-                # lets the arranger fall back to other stages/random boxes.
+                # lets the arranger fall back to other stages.
                 _logger.debug(
                     "[%s] foreground mask rejected as full-frame: ratio=%.4f limit=%.4f",
                     self.source_name,
@@ -216,7 +216,9 @@ class SaliencyDetectionBackend:
             try:
                 import numpy as np
             except ImportError as exc:
-                raise RuntimeError("缺少 NumPy 依赖，请先安装 requirements.txt。") from exc
+                raise RuntimeError(
+                    "缺少 NumPy 依赖，请先安装 requirements.txt。"
+                ) from exc
             self._np = np
         return self._np
 
@@ -225,6 +227,10 @@ class SaliencyDetectionBackend:
     def _infer(self, image_rgb):
         with self._inference_lock:
             np = self.load_numpy()
+            # A spatially uniform canvas has no foreground boundary. Per-image
+            # min-max normalization would otherwise amplify tiny model noise.
+            if not np.any(np.ptp(image_rgb, axis=(0, 1))):
+                return np.zeros((1, 1, 1, 1), dtype=np.float32)
             session = self._get_session()
             tensor = self._prepare_input(image_rgb)
             _logger.debug(
@@ -264,7 +270,7 @@ class SaliencyDetectionBackend:
             resized_height = max(1, round(image_height * scale))
             resized = Image.fromarray(image_rgb).resize(
                 (resized_width, resized_height),
-                Image.BILINEAR,
+                Image.Resampling.LANCZOS,
             )
             canvas = Image.new("RGB", (input_width, input_height), (0, 0, 0))
             offset_x = (input_width - resized_width) // 2
@@ -280,10 +286,11 @@ class SaliencyDetectionBackend:
         else:
             resized = Image.fromarray(image_rgb).resize(
                 (input_width, input_height),
-                Image.BILINEAR,
+                Image.Resampling.LANCZOS,
             )
             self._last_input_transform = (0, 0, input_width, input_height)
-        tensor = np.asarray(resized).astype(np.float32) / 255.0
+        tensor = np.asarray(resized).astype(np.float32)
+        tensor /= max(float(tensor.max()), 1e-6)
         mean = np.asarray(_IMAGENET_MEAN, dtype=np.float32).reshape(1, 1, 3)
         std = np.asarray(_IMAGENET_STD, dtype=np.float32).reshape(1, 1, 3)
         tensor = (tensor - mean) / std
@@ -325,9 +332,7 @@ class SaliencyDetectionBackend:
             return mask
         mask_height, mask_width = mask.shape
         input_width, input_height = self._input_size
-        offset_x, offset_y, resized_width, resized_height = (
-            self._last_input_transform
-        )
+        offset_x, offset_y, resized_width, resized_height = self._last_input_transform
         # The output mask can differ from the input tensor resolution.  Map
         # the recorded input-space transform into output-mask coordinates.
         scale_mask_x = mask_width / max(1, input_width)
@@ -345,83 +350,15 @@ class SaliencyDetectionBackend:
         cropped = mask[crop_y1:crop_y2, crop_x1:crop_x2]
         if not cropped.size:
             cropped = mask
-        if cropped.shape != (image_height, image_width):
-            try:
-                from PIL import Image
-            except ImportError as exc:
-                raise RuntimeError(
-                    "缺少 Pillow 依赖，请先安装 requirements.txt。"
-                ) from exc
-            cropped = np.asarray(
-                Image.fromarray(cropped.astype(np.float32), mode="F").resize(
-                    (image_width, image_height),
-                    Image.BILINEAR,
-                ),
-                dtype=np.float32,
-            )
+        # Extract components at model resolution; coordinates are scaled by
+        # detect(). Upscaling first makes large source images unnecessarily slow.
         return np.clip(cropped, 0.0, 1.0)
 
     def _extract_connected_components(
         self,
         binary_mask,
     ) -> list[tuple[int, int, int, int, int]]:
-        """4-连通域标记，返回 (min_x, min_y, max_x, max_y, area) 列表。
-
-        320×320 的显著性 mask 前景像素通常在 5%-30% 之间，纯 Python BFS 可控。
-        为避免退化到"整图都是前景"的极端情况，加了一个 fg_ratio 上限守卫。
-        """
-        np = self.load_numpy()
-        mask = np.ascontiguousarray(binary_mask, dtype=bool).copy()
-        height, width = mask.shape
-        total = height * width
-        fg_count = int(mask.sum())
-        if fg_count == 0:
-            return []
-        # Keep the component extractor safe when called directly as well as
-        # through detect().  A nearly full-frame mask is treated as an
-        # uncertain prediction instead of producing a useless whole-image box.
-        if fg_count / max(1, total) >= self.max_foreground_ratio:
-            return []
-
-        components: list[tuple[int, int, int, int, int]] = []
-        # 直接把 mask 做 list-of-list，避免 numpy 单像素读写在 Python 循环里的开销
-        rows = [row.tolist() for row in mask]
-        for seed_y in range(height):
-            row = rows[seed_y]
-            for seed_x in range(width):
-                if not row[seed_x]:
-                    continue
-                queue: deque[tuple[int, int]] = deque()
-                queue.append((seed_y, seed_x))
-                rows[seed_y][seed_x] = False
-                min_x = max_x = seed_x
-                min_y = max_y = seed_y
-                area = 0
-                while queue:
-                    y, x = queue.popleft()
-                    area += 1
-                    if x < min_x:
-                        min_x = x
-                    if x > max_x:
-                        max_x = x
-                    if y < min_y:
-                        min_y = y
-                    if y > max_y:
-                        max_y = y
-                    if y + 1 < height and rows[y + 1][x]:
-                        rows[y + 1][x] = False
-                        queue.append((y + 1, x))
-                    if y - 1 >= 0 and rows[y - 1][x]:
-                        rows[y - 1][x] = False
-                        queue.append((y - 1, x))
-                    if x + 1 < width and rows[y][x + 1]:
-                        rows[y][x + 1] = False
-                        queue.append((y, x + 1))
-                    if x - 1 >= 0 and rows[y][x - 1]:
-                        rows[y][x - 1] = False
-                        queue.append((y, x - 1))
-                components.append((min_x, min_y, max_x, max_y, area))
-        return components
+        return connected_components(binary_mask)
 
     # -- session / model download (对齐 yolo_backend 的行为) ---------------
 
@@ -492,9 +429,10 @@ class SaliencyDetectionBackend:
             self.model_path,
         )
         try:
-            with urlopen(self.model_url, timeout=60) as response, temp_path.open(
-                "wb"
-            ) as file_obj:
+            with (
+                urlopen(self.model_url, timeout=60) as response,
+                temp_path.open("wb") as file_obj,
+            ):
                 shutil.copyfileobj(response, file_obj)
             temp_path.replace(self.model_path)
             _logger.info(

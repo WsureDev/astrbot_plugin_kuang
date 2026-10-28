@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -6,150 +7,79 @@ from core.detector import EspBoxDetector
 from core.models import DetectionBox
 
 
-class EmptyPrimaryBackend:
-    def load_numpy(self):
-        return np
-
-    def detect(self, image_rgb):
-        del image_rgb
-        return []
-
-
-class CountingSaliencyBackend:
-    def __init__(self):
+class CountingBackend:
+    def __init__(self, boxes=()):
+        self.boxes = list(boxes)
         self.calls = 0
 
-    def detect(self, image_rgb):
+    def detect(self, image):
         self.calls += 1
-        height, width = image_rgb.shape[:2]
-        return [
-            DetectionBox(
-                x1=0,
-                y1=0,
-                x2=max(1, width // 2),
-                y2=max(1, height // 2),
-                score=0.8,
-                category="salient",
-                priority=0,
-                source="saliency",
-                stage="stage3_salient",
-                part="salient",
-                semantic_role="salient",
-            )
-        ]
+        return list(self.boxes)
 
 
-class EmptySaliencyBackend(CountingSaliencyBackend):
-    def detect(self, image_rgb):
-        del image_rgb
-        self.calls += 1
-        return []
+def box(coords, category="person", score=0.9):
+    return DetectionBox(*coords, score, category, 0, "test")
 
 
-class MotionStub:
-    def __init__(self):
-        self.calls = 0
-
-    def detect(self, current, previous):
-        self.calls += 1
-        if np.array_equal(current, previous):
-            return []
-        return [
-            DetectionBox(
-                x1=2,
-                y1=2,
-                x2=6,
-                y2=6,
-                score=0.5,
-                category="motion",
-                priority=0,
-                source="motion",
-                stage="stage4_motion",
-                part="motion",
-                semantic_role="motion",
-            )
-        ]
+def make_detector(primary=(), anime=(), salient=(), policy="adaptive"):
+    d = EspBoxDetector(
+        model_path="unused",
+        detection_backend=CountingBackend(primary),
+        enable_saliency=True,
+        saliency_model_path="unused",
+        fallback_policy=policy,
+    )
+    d._backend_plan = SimpleNamespace(
+        mode="yolo_with_anime_fallback",
+        primary_backend=CountingBackend(primary),
+        secondary_backend=CountingBackend(anime),
+        anime_fallback_trigger_count=2,
+        ignore_secondary_errors=True,
+    )
+    d._saliency_backend = CountingBackend(salient)
+    return d
 
 
-class DetectorSaliencyReuseTests(unittest.TestCase):
-    def make_detector(self):
-        detector = EspBoxDetector(
-            box_count=2,
-            model_path="unused.onnx",
-            detection_backend=EmptyPrimaryBackend(),
-            enable_saliency=True,
-            saliency_model_path="unused-saliency.onnx",
-            enable_motion=True,
-            enable_random_boxes=False,
+class DetectorRoutingTests(unittest.TestCase):
+    def setUp(self):
+        self.image = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    def test_empty_detection_stays_empty(self):
+        self.assertEqual(make_detector().analyze(self.image).final_boxes, [])
+
+    def test_reliable_person_skips_both_fallback_models(self):
+        d = make_detector([box((10, 10, 80, 90))])
+        result = d.analyze(self.image)
+        self.assertEqual(len(result.final_boxes), 1)
+        self.assertEqual(d._backend_plan.secondary_backend.calls, 0)
+        self.assertEqual(d._saliency_backend.calls, 0)
+
+    def test_closeup_head_is_a_complete_subject(self):
+        d = make_detector(anime=[box((0, 0, 95, 95), "Head")])
+        result = d.analyze(self.image)
+        self.assertEqual(result.final_boxes[0].category, "Head")
+        self.assertEqual(result.final_boxes[0].as_tuple(), (0, 0, 95, 95))
+        self.assertEqual(d._saliency_backend.calls, 0)
+
+    def test_small_head_does_not_prevent_foreground_completion(self):
+        foreground = box((10, 0, 90, 100), "salient", 0.7).clone(
+            stage="stage3_salient", semantic_role="salient"
         )
-        saliency = CountingSaliencyBackend()
-        motion = MotionStub()
-        detector._saliency_backend = saliency
-        detector._motion_backend = motion
-        return detector, saliency, motion
+        d = make_detector(anime=[box((30, 10, 70, 50), "Head")], salient=[foreground])
+        result = d.analyze(self.image)
+        self.assertEqual(d._saliency_backend.calls, 1)
+        self.assertEqual([b.as_tuple() for b in result.final_boxes], [(10, 0, 90, 100)])
 
-    def make_non_reusing_detector(self):
-        detector, saliency, motion = self.make_detector()
-        detector.saliency_reuse_static_frames = False
-        return detector, saliency, motion
+    def test_all_policy_bypasses_quality_and_count_gates(self):
+        d = make_detector(
+            primary=[box((0, 0, 40, 100)), box((50, 0, 100, 100))], policy="all"
+        )
+        d.analyze(self.image)
+        self.assertEqual(d._backend_plan.secondary_backend.calls, 1)
+        self.assertEqual(d._saliency_backend.calls, 1)
 
-    def test_identical_gif_frame_reuses_saliency_result(self):
-        detector, saliency, motion = self.make_detector()
-        first = np.zeros((8, 8, 3), dtype=np.uint8)
-        second = first.copy()
-
-        detector.analyze(first)
-        detector.analyze(second, previous_frame_rgb=first)
-
-        self.assertEqual(saliency.calls, 1)
-        self.assertEqual(motion.calls, 1)
-
-    def test_motion_invalidates_saliency_cache(self):
-        detector, saliency, motion = self.make_detector()
-        first = np.zeros((8, 8, 3), dtype=np.uint8)
-        changed = first.copy()
-        changed[3:5, 3:5] = 255
-
-        detector.analyze(first)
-        detector.analyze(changed, previous_frame_rgb=first)
-
-        self.assertEqual(saliency.calls, 2)
-        self.assertEqual(motion.calls, 1)
-
-    def test_cache_does_not_cross_concurrent_streams(self):
-        detector, saliency, _ = self.make_detector()
-        stream_a = np.zeros((8, 8, 3), dtype=np.uint8)
-        stream_b = np.full((8, 8, 3), 64, dtype=np.uint8)
-
-        detector.analyze(stream_a)
-        detector.analyze(stream_b)
-        detector.analyze(stream_a.copy(), previous_frame_rgb=stream_a)
-
-        self.assertEqual(saliency.calls, 3)
-
-    def test_static_frame_reuse_can_be_disabled(self):
-        detector, saliency, _ = self.make_non_reusing_detector()
-        first = np.zeros((8, 8, 3), dtype=np.uint8)
-        second = first.copy()
-
-        detector.analyze(first)
-        detector.analyze(second, previous_frame_rgb=first)
-
-        self.assertEqual(saliency.calls, 2)
-
-    def test_empty_saliency_result_is_cached(self):
-        detector, _, motion = self.make_detector()
-        empty_saliency = EmptySaliencyBackend()
-        detector._saliency_backend = empty_saliency
-        first = np.zeros((8, 8, 3), dtype=np.uint8)
-        second = first.copy()
-
-        detector.analyze(first)
-        detector.analyze(second, previous_frame_rgb=first)
-
-        self.assertEqual(empty_saliency.calls, 1)
-        self.assertEqual(motion.calls, 1)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_separate_calls_have_no_frame_cache(self):
+        d = make_detector()
+        d.analyze(self.image)
+        d.analyze(self.image.copy(), previous_frame_rgb=self.image)
+        self.assertEqual(d._saliency_backend.calls, 2)

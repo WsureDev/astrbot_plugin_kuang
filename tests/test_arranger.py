@@ -118,5 +118,41 @@ class DetectionArrangerTests(unittest.TestCase):
         self.assertEqual(len(generic_selected), 2)
 
 
+class SubjectFusionTests(unittest.TestCase):
+    def arrange(self, parts, foreground):
+        return DetectionArranger(box_count=5).arrange(
+            stage1_boxes=[],
+            stage2_boxes=parts,
+            stage2_composite_boxes=[],
+            stage3_boxes=[foreground],
+            stage4_boxes=[],
+        )
+
+    def test_complete_foreground_absorbs_small_head(self):
+        head = make_box(
+            (30, 10, 70, 50), category="Head", role="anime_head", stage="stage2_anime"
+        )
+        foreground = make_box((10, 0, 90, 100), role="salient", stage="stage3_salient")
+        selected = self.arrange([head], foreground)
+        self.assertEqual([b.as_tuple() for b in selected], [foreground.as_tuple()])
+
+    def test_foreground_does_not_merge_multiple_heads(self):
+        heads = [
+            make_box(coords, category="Head", role="anime_head", stage="stage2_anime")
+            for coords in ((0, 0, 30, 30), (60, 0, 90, 30))
+        ]
+        selected = self.arrange(heads, make_box((0, 0, 100, 100), role="salient"))
+        self.assertEqual(
+            [b.as_tuple() for b in selected], [b.as_tuple() for b in heads]
+        )
+
+    def test_closeup_head_is_not_replaced_by_similar_mask(self):
+        head = make_box(
+            (0, 0, 95, 95), category="Head", role="anime_head", stage="stage2_anime"
+        )
+        selected = self.arrange([head], make_box((0, 0, 100, 100), role="salient"))
+        self.assertEqual([b.as_tuple() for b in selected], [head.as_tuple()])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -27,7 +27,7 @@ _logger = get_logger(_PLUGIN_NAME)
     "kuang",
     "WsureDev",
     "为图片叠加 FPS 外挂透视风格白色线框",
-    "0.7.2",
+    "0.8.0",
     "https://github.com/WsureDev/astrbot_plugin_kuang",
 )
 class KuangPlugin(Star):
@@ -81,6 +81,8 @@ class KuangPlugin(Star):
         )
         self.detector = EspBoxDetector(
             box_count=int(self.config.get("box_count", 5)),
+            fallback_policy=str(self.config.get("fallback_policy", "adaptive")),
+            inference_num_threads=int(self.config.get("inference_num_threads", 0)),
             model_path=model_path,
             model_url=str(self.config.get("model_url", "")).strip(),
             auto_download_model=bool(self.config.get("auto_download_model", True)),
@@ -89,21 +91,6 @@ class KuangPlugin(Star):
             ),
             nms_iou_threshold=float(self.config.get("detector_iou_threshold", 0.45)),
             model_input_size=int(self.config.get("model_input_size", 640)),
-            random_width_ratio_min=float(
-                self.config.get("random_width_ratio_min", 0.28)
-            ),
-            random_width_ratio_max=float(
-                self.config.get("random_width_ratio_max", 0.52)
-            ),
-            random_height_ratio_min=float(
-                self.config.get("random_height_ratio_min", 0.09)
-            ),
-            random_height_ratio_max=float(
-                self.config.get("random_height_ratio_max", 0.55)
-            ),
-            enable_random_boxes=bool(
-                self.config.get("enable_random_boxes", True)
-            ),
             backend_name=detector_backend,
             enable_anime_fallback=enable_anime_fallback,
             anime_model_path=anime_model_path,
@@ -124,7 +111,7 @@ class KuangPlugin(Star):
             anime_merge_iou_threshold=float(
                 self.config.get("anime_merge_iou_threshold", 0.45)
             ),
-            enable_saliency=bool(self.config.get("enable_saliency", False)),
+            enable_saliency=bool(self.config.get("enable_saliency", True)),
             saliency_model_path=saliency_model_path,
             saliency_model_url=str(
                 self.config.get("saliency_model_url", "")
@@ -145,7 +132,7 @@ class KuangPlugin(Star):
                 self.config.get("saliency_max_boxes", 8)
             ),
             saliency_max_foreground_ratio=float(
-                self.config.get("saliency_max_foreground_ratio", 0.92)
+                self.config.get("saliency_max_foreground_ratio", 0.995)
             ),
             saliency_preserve_aspect_ratio=bool(
                 self.config.get("saliency_preserve_aspect_ratio", False)
@@ -155,9 +142,6 @@ class KuangPlugin(Star):
             ),
             saliency_inter_op_num_threads=int(
                 self.config.get("saliency_inter_op_num_threads", 0)
-            ),
-            saliency_reuse_static_frames=bool(
-                self.config.get("saliency_reuse_static_frames", True)
             ),
             saliency_minmax_normalize_output=bool(
                 self.config.get("saliency_minmax_normalize_output", True)
@@ -185,6 +169,12 @@ class KuangPlugin(Star):
             detector=self.detector,
             renderer=self.renderer,
             output_dir=self.output_dir,
+            gif_detection_interval=int(self.config.get("gif_detection_interval", 4)),
+            gif_max_reuse_ms=int(self.config.get("gif_max_reuse_ms", 240)),
+        )
+
+        self._processing_slots = asyncio.Semaphore(
+            max(1, int(self.config.get("max_concurrent_images", 1)))
         )
 
     @filter.regex(r"框")
@@ -221,10 +211,11 @@ class KuangPlugin(Star):
             try:
                 input_path = await image_target.convert_to_file_path()
                 _logger.debug(f"processing image target: {input_path}")
-                output_path = await asyncio.to_thread(
-                    self.processor.render_path,
-                    input_path,
-                )
+                async with self._processing_slots:
+                    output_path = await asyncio.to_thread(
+                        self.processor.render_path,
+                        input_path,
+                    )
                 event.track_temporary_local_file(output_path)
                 output_paths.append(output_path)
                 _logger.debug(
@@ -288,7 +279,7 @@ class KuangPlugin(Star):
                     return Image.fromURL(avatar_value)
 
         if not avatar_user_id:
-            _logger.debug(f"avatar target unavailable: no target_user_id or sender_id")
+            _logger.debug("avatar target unavailable: no target_user_id or sender_id")
             return None
 
         template = str(self.config.get("avatar_url_template", "")).strip()

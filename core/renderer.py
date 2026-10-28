@@ -167,7 +167,9 @@ class EspBoxRenderer:
 
         os.makedirs(output_dir, exist_ok=True)
         prepared_frames = [
-            frame.convert("P", palette=Image.Palette.ADAPTIVE, colors=256)
+            frame
+            if frame.mode == "P"
+            else frame.convert("P", palette=Image.Palette.ADAPTIVE, colors=256)
             for frame in frames
         ]
         output_path = os.path.join(

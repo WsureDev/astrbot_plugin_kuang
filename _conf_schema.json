@@ -1,7 +1,7 @@
 {
   "box_count": {
-    "description": "每张图输出的线框数量",
-    "hint": "默认最多输出 5 个框。开启随机补框时，YOLO26n 识别不足会自动补齐；关闭后只保留识别出的框。",
+    "description": "主体框数量上限",
+    "hint": "最多保留的主体框数量，默认 5。无可靠主体时不绘框。",
     "type": "int",
     "default": 5
   },
@@ -47,15 +47,9 @@
     "type": "bool",
     "default": true
   },
-  "enable_random_boxes": {
-    "description": "启用随机补框",
-    "hint": "默认开启。关闭后只保留 YOLO26n 识别到的框，不再补齐到固定数量。",
-    "type": "bool",
-    "default": true
-  },
   "enable_anime_fallback": {
     "description": "启用二次元检测兜底",
-    "hint": "默认关闭。开启后，当 yolo26n 的人形检测结果较少时，会尝试使用动漫部位 YOLO 模型做第二级补强。",
+    "hint": "默认关闭，保留 Head / Torso / Legs 模型。开启后按需补强动漫人物，独立大头特写也可作为主体。",
     "type": "bool",
     "default": false
   },
@@ -91,13 +85,13 @@
   },
   "anime_model_input_size": {
     "description": "动漫 YOLO 输入尺寸",
-    "hint": "默认 640。按你使用的动漫 ONNX 模型输入尺寸调整。",
+    "hint": "默认 640。实际尺寸优先服从 ONNX 输入；固定尺寸模型需要重新导出才能改变分辨率。",
     "type": "int",
     "default": 640
   },
   "anime_fallback_trigger_count": {
     "description": "触发动漫兜底的主检测数量阈值",
-    "hint": "默认 2。主 yolo26n 的 person 检测数量少于这个值时，才会运行动漫补强模型。",
+    "hint": "默认 2。主模型 person 数达到该数量时跳过动漫补强；adaptive 策略还会检查主体质量。all 策略忽略此限制。",
     "type": "int",
     "default": 2
   },
@@ -109,9 +103,9 @@
   },
   "enable_saliency": {
     "description": "启用显著性检测（阶段3）",
-    "hint": "默认关闭。开启后使用 U²-Net-p ONNX 识别『未知但明显是前景』的主体，覆盖卡通形象、机器人、雕塑、玩偶等 YOLO 无类可用的目标。",
+    "hint": "默认开启。主体检测不足时用 U²-Net-p 提取前景，覆盖未知角色、卡通和玩偶。",
     "type": "bool",
-    "default": false
+    "default": true
   },
   "saliency_model_path": {
     "description": "显著性模型文件路径",
@@ -133,7 +127,7 @@
   },
   "saliency_model_input_size": {
     "description": "显著性模型输入尺寸",
-    "hint": "默认 320。U²-Net-p 官方推荐 320，改大会更精准但显著变慢。",
+    "hint": "默认 320。实际尺寸优先服从 ONNX 输入；固定尺寸模型不能仅靠此配置改变分辨率。",
     "type": "int",
     "default": 320
   },
@@ -157,9 +151,9 @@
   },
   "saliency_max_foreground_ratio": {
     "description": "显著性 mask 最大前景占比",
-    "hint": "默认 0.92。若超过约 92% 的图像都被判为前景，通常是模型不确定或背景误检，将跳过该 mask。",
+    "hint": "默认 0.995，允许主体占满大部分画面的大头特写；几乎全白的无区分 mask 仍会丢弃。",
     "type": "float",
-    "default": 0.92
+    "default": 0.995
   },
   "saliency_preserve_aspect_ratio": {
     "description": "显著性预处理保持原图长宽比",
@@ -178,12 +172,6 @@
     "hint": "默认 0 由 ONNX Runtime 自动选择；通常无需修改。",
     "type": "int",
     "default": 0
-  },
-  "saliency_reuse_static_frames": {
-    "description": "GIF 静止帧复用显著性结果",
-    "hint": "默认开启。启用运动检测时，未检测到运动的相邻帧会复用上一帧显著性框；关闭后每帧重新推理。",
-    "type": "bool",
-    "default": true
   },
   "saliency_minmax_normalize_output": {
     "description": "显著性输出做逐图 min-max 归一化",
@@ -239,30 +227,6 @@
     "type": "int",
     "default": 220
   },
-  "random_width_ratio_min": {
-    "description": "随机框最小宽高比",
-    "hint": "按 FPS 透视框风格使用偏细长矩形。这里是宽/高的最小值。",
-    "type": "float",
-    "default": 0.28
-  },
-  "random_width_ratio_max": {
-    "description": "随机框最大宽高比",
-    "hint": "按 FPS 透视框风格使用偏细长矩形。这里是宽/高的最大值。",
-    "type": "float",
-    "default": 0.52
-  },
-  "random_height_ratio_min": {
-    "description": "随机框最小高度占图比例",
-    "hint": "默认允许小框下探到大框约 1/6 的量级，用来模拟 FPS 视角里的远近差异。",
-    "type": "float",
-    "default": 0.09
-  },
-  "random_height_ratio_max": {
-    "description": "随机框最大高度占图比例",
-    "hint": "默认随机框高度不会过大，避免盖住整张图。",
-    "type": "float",
-    "default": 0.55
-  },
   "avatar_url_template": {
     "description": "头像 URL 模板",
     "hint": "留空时，若发送者 ID 为纯数字，则默认使用 QQ 头像地址。可使用 {user_id}、{platform_name}、{platform_id} 变量。",
@@ -274,5 +238,35 @@
     "hint": "开启后本插件的调试日志会以 INFO 形式输出（前缀 [DEBUG][astrbot_plugin_kuang]），不会修改 AstrBot 全局日志级别，也不影响其他插件。",
     "type": "bool",
     "default": false
+  },
+  "fallback_policy": {
+    "description": "补强模型调度策略",
+    "hint": "adaptive：已有可靠主体就跳过后续模型；all：运行所有已启用阶段，适合对比评估。",
+    "type": "string",
+    "default": "adaptive"
+  },
+  "inference_num_threads": {
+    "description": "YOLO 推理线程数",
+    "hint": "0 使用 ONNX Runtime 默认值。多请求场景可对比 1、2、4，显著性线程使用其独立配置。",
+    "type": "int",
+    "default": 0
+  },
+  "max_concurrent_images": {
+    "description": "同时处理图片的任务数",
+    "hint": "默认 1，避免多个模型争抢 CPU 和内存。排队等待不会阻塞消息事件循环。",
+    "type": "int",
+    "default": 1
+  },
+  "gif_detection_interval": {
+    "description": "GIF 完整检测间隔帧数",
+    "hint": "默认每 4 帧重检；中间帧用光流跟踪，跟踪失效立即重检。设为 1 则每帧检测。",
+    "type": "int",
+    "default": 4
+  },
+  "gif_max_reuse_ms": {
+    "description": "GIF 跟踪结果最长复用毫秒数",
+    "hint": "默认 240 毫秒，按 GIF 帧时长累计，达到帧数或时长任一上限即重检。",
+    "type": "int",
+    "default": 240
   }
 }

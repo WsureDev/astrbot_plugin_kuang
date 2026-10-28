@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from time import perf_counter
 
 from .arranger import DetectionArranger
 from .detection_backend import DetectionBackend
 from .logger import get_logger
 from .models import DetectionBox, DetectionPipelineResult
 from .motion_backend import MotionDetectionBackend
-from .random_layout import PerspectiveRandomBoxGenerator
 from .saliency_backend import SaliencyDetectionBackend
 from .yolo_backend import (
     DEFAULT_ANIME_YOLO_MODEL_URL,
@@ -55,13 +54,8 @@ class EspBoxDetector:
         model_url: str = DEFAULT_YOLO26N_MODEL_URL,
         auto_download_model: bool = True,
         confidence_threshold: float = 0.25,
-        random_width_ratio_min: float = 0.28,
-        random_width_ratio_max: float = 0.52,
-        random_height_ratio_min: float = 0.09,
-        random_height_ratio_max: float = 0.55,
         nms_iou_threshold: float = 0.45,
         model_input_size: int = 640,
-        enable_random_boxes: bool = True,
         backend_name: str = "yolo26n",
         enable_anime_fallback: bool = False,
         anime_model_path: str = "",
@@ -80,11 +74,10 @@ class EspBoxDetector:
         saliency_threshold: float = 0.5,
         saliency_min_area_ratio: float = 0.005,
         saliency_max_boxes: int = 8,
-        saliency_max_foreground_ratio: float = 0.92,
+        saliency_max_foreground_ratio: float = 0.995,
         saliency_preserve_aspect_ratio: bool = False,
         saliency_intra_op_num_threads: int = 0,
         saliency_inter_op_num_threads: int = 0,
-        saliency_reuse_static_frames: bool = True,
         saliency_minmax_normalize_output: bool = True,
         enable_motion: bool = False,
         motion_diff_threshold: int = 25,
@@ -92,22 +85,12 @@ class EspBoxDetector:
         motion_max_boxes: int = 8,
         motion_downscale_long_edge: int = 240,
         motion_dilate_radius: int = 4,
+        fallback_policy: str = "adaptive",
+        inference_num_threads: int = 0,
         detection_backend: DetectionBackend | None = None,
     ) -> None:
         self.box_count = max(1, int(box_count))
-        self.enable_random_boxes = bool(enable_random_boxes)
         self._candidate_limit = max(12, self.box_count * 4)
-        _logger.debug(
-            "[detector] init: backend=%s box_count=%s enable_random_boxes=%s enable_anime_fallback=%s anime_model_path=%s anime_auto_download=%s anime_trigger=%s candidate_limit=%s",
-            backend_name,
-            self.box_count,
-            self.enable_random_boxes,
-            enable_anime_fallback,
-            anime_model_path or "<default>",
-            anime_auto_download_model,
-            anime_fallback_trigger_count,
-            self._candidate_limit,
-        )
         self._backend_plan = self._build_backend_plan(
             detection_backend=detection_backend,
             backend_name=backend_name,
@@ -130,21 +113,19 @@ class EspBoxDetector:
             box_count=self.box_count,
             anime_merge_iou_threshold=anime_merge_iou_threshold,
         )
-        self._random_box_generator = PerspectiveRandomBoxGenerator(
-            box_count=self.box_count,
-            random_width_ratio_min=random_width_ratio_min,
-            random_width_ratio_max=random_width_ratio_max,
-            random_height_ratio_min=random_height_ratio_min,
-            random_height_ratio_max=random_height_ratio_max,
-        )
-
+        self.fallback_policy = str(fallback_policy).lower()
+        if self.fallback_policy not in {"adaptive", "all"}:
+            raise ValueError("fallback_policy 必须为 adaptive 或 all")
+        for backend in (
+            self._backend_plan.primary_backend,
+            self._backend_plan.secondary_backend,
+        ):
+            if isinstance(
+                backend, (Yolo26nDetectionBackend, AnimeYoloDetectionBackend)
+            ):
+                backend.intra_op_num_threads = max(0, int(inference_num_threads))
         self.enable_saliency = bool(enable_saliency)
-        self.saliency_reuse_static_frames = bool(saliency_reuse_static_frames)
         self._saliency_backend: SaliencyDetectionBackend | None = None
-        self._saliency_cache_boxes: list[DetectionBox] = []
-        self._saliency_cache_frame_shape: tuple[int, ...] | None = None
-        self._saliency_cache_frame = None
-        self._saliency_cache_valid = False
         if self.enable_saliency:
             self._saliency_backend = SaliencyDetectionBackend(
                 model_path=saliency_model_path,
@@ -161,12 +142,11 @@ class EspBoxDetector:
                 minmax_normalize_output=saliency_minmax_normalize_output,
             )
             _logger.info(
-                "[detector] saliency stage3 enabled: model_path=%s auto_download=%s input=%s threshold=%.3f reuse_static=%s",
+                "[detector] saliency stage3 enabled: model_path=%s auto_download=%s input=%s threshold=%.3f",
                 saliency_model_path or "<default>",
                 saliency_auto_download_model,
                 saliency_model_input_size,
                 saliency_threshold,
-                self.saliency_reuse_static_frames,
             )
         else:
             _logger.debug("[detector] saliency stage3 disabled")
@@ -221,108 +201,95 @@ class EspBoxDetector:
         *,
         previous_frame_rgb=None,
     ) -> DetectionPipelineResult:
-        image_height, image_width = image_rgb.shape[:2]
-        stage1_boxes = self._run_stage1(image_rgb)
-        stage2_boxes = self._run_stage2(image_rgb, stage1_boxes)
-        stage2_composite_boxes = self._arranger.compose_anime_boxes(stage2_boxes)
-        stage4_boxes = self._run_stage4(image_rgb, previous_frame_rgb)
-        stage3_boxes = self._run_stage3(
-            image_rgb,
-            previous_frame_rgb=previous_frame_rgb,
-            motion_boxes=stage4_boxes,
-        )
-        arranged_boxes = self._arranger.arrange(
-            stage1_boxes=stage1_boxes,
-            stage2_boxes=stage2_boxes,
-            stage2_composite_boxes=stage2_composite_boxes,
-            stage3_boxes=stage3_boxes,
-            stage4_boxes=stage4_boxes,
-        )
-        _logger.debug(
-            "[detector] arranged detections=%s details=%s",
-            len(arranged_boxes),
-            self._summarize_detections(arranged_boxes),
-        )
+        timings: dict[str, float] = {}
+        decisions: dict[str, str] = {}
 
-        random_boxes: list[DetectionBox] = []
-        if self.enable_random_boxes and len(arranged_boxes) < self.box_count:
-            missing = self.box_count - len(arranged_boxes)
-            _logger.debug(
-                "[detector] random box fallback triggered: arranged=%s missing=%s",
-                len(arranged_boxes),
-                missing,
-            )
-            random_boxes = [
-                item.clone(
-                    stage="stage5_random",
-                    semantic_role="random",
-                    part="random",
-                )
-                for item in self._random_box_generator.generate_missing_boxes(
-                    image_width,
-                    image_height,
-                    missing,
-                    arranged_boxes,
-                )
-            ]
-            _logger.debug(
-                "[detector] random boxes=%s details=%s",
-                len(random_boxes),
-                self._summarize_detections(random_boxes),
-            )
+        def timed(name, call):
+            started = perf_counter()
+            result = call()
+            timings[name] = (perf_counter() - started) * 1000
+            return result
+
+        stage1 = timed("primary", lambda: self._run_stage1(image_rgb))
+        skip_anime = self.fallback_policy == "adaptive" and self._has_usable_subject(
+            stage1, image_rgb
+        )
+        if skip_anime:
+            stage2 = []
+            decisions["anime"] = "primary_subject_sufficient"
         else:
-            _logger.debug(
-                "[detector] random box fallback skipped: enabled=%s arranged=%s target=%s",
-                self.enable_random_boxes,
-                len(arranged_boxes),
-                self.box_count,
+            stage2 = timed("anime", lambda: self._run_stage2(image_rgb, stage1))
+            decisions["anime"] = (
+                "evaluated"
+                if self._backend_plan.mode in {"anime_only", "yolo_with_anime_fallback"}
+                else "disabled"
             )
-
-        final_detections = (arranged_boxes + random_boxes)[: self.box_count]
-        _logger.debug(
-            "[detector] pipeline summary: stage1=%s stage2=%s stage2_composite=%s stage3=%s stage4=%s arranged=%s random=%s final=%s",
-            len(stage1_boxes),
-            len(stage2_boxes),
-            len(stage2_composite_boxes),
-            len(stage3_boxes),
-            len(stage4_boxes),
-            len(arranged_boxes),
-            len(random_boxes),
-            len(final_detections),
+        composites = self._arranger.compose_anime_boxes(stage2)
+        skip_saliency = self.fallback_policy == "adaptive" and self._has_usable_subject(
+            stage1 + composites + stage2, image_rgb
+        )
+        if skip_saliency:
+            stage3 = []
+            decisions["saliency"] = "subject_sufficient"
+        else:
+            stage3 = timed("saliency", lambda: self._run_stage3(image_rgb))
+            decisions["saliency"] = "evaluated" if self.enable_saliency else "disabled"
+        stage4 = timed(
+            "motion", lambda: self._run_stage4(image_rgb, previous_frame_rgb)
+        )
+        arranged = timed(
+            "arrange",
+            lambda: self._arranger.arrange(
+                stage1_boxes=stage1,
+                stage2_boxes=stage2,
+                stage2_composite_boxes=composites,
+                stage3_boxes=stage3,
+                stage4_boxes=stage4,
+            ),
         )
         _logger.debug(
-            "[detector] final detections=%s details=%s",
-            len(final_detections),
-            self._summarize_detections(final_detections),
+            "[detector] stages=%s/%s/%s/%s final=%s decisions=%s timings_ms=%s",
+            len(stage1),
+            len(stage2),
+            len(stage3),
+            len(stage4),
+            len(arranged),
+            decisions,
+            timings,
         )
         return DetectionPipelineResult(
-            stage1_boxes=stage1_boxes,
-            stage2_boxes=stage2_boxes,
-            stage2_composite_boxes=stage2_composite_boxes,
-            stage3_boxes=stage3_boxes,
-            stage4_boxes=stage4_boxes,
-            arranged_boxes=arranged_boxes,
-            random_boxes=random_boxes,
-            final_boxes=final_detections,
+            stage1_boxes=stage1,
+            stage2_boxes=stage2,
+            stage2_composite_boxes=composites,
+            stage3_boxes=stage3,
+            stage4_boxes=stage4,
+            arranged_boxes=arranged,
+            final_boxes=list(arranged),
+            timings_ms=timings,
+            decisions=decisions,
         )
+
+    @staticmethod
+    def _has_usable_subject(boxes: list[DetectionBox], image_rgb) -> bool:
+        area = max(1, image_rgb.shape[0] * image_rgb.shape[1])
+        for box in boxes:
+            ratio = box.area / area
+            if box.semantic_role in {
+                "person_full",
+                "animal",
+                "anime_full_body",
+                "anime_upper_body",
+            }:
+                if box.score >= 0.6 and ratio >= 0.12:
+                    return True
+            # A large head is a legitimate subject in a close-up. Do not
+            # require an imaginary torso or legs outside the image.
+            if box.semantic_role == "anime_head" and box.score >= 0.65 and ratio >= 0.4:
+                return True
+        return False
 
     def detect(self, image_rgb) -> list[DetectionBox]:
         return self.analyze(image_rgb).final_boxes
-
-    def generate_random_layout_preview(
-        self,
-        image_width: int,
-        image_height: int,
-        *,
-        box_count: int | None = None,
-        seed: int | None = None,
-    ) -> tuple[list[DetectionBox], dict[str, Any]]:
-        return self._random_box_generator.generate_random_layout_preview(
-            image_width,
-            image_height,
-            box_count=box_count,
-            seed=seed,
-        )
 
     def _load_numpy(self):
         for backend in (
@@ -342,7 +309,9 @@ class EspBoxDetector:
 
     def _run_stage1(self, image_rgb) -> list[DetectionBox]:
         if self._backend_plan.mode == "anime_only":
-            _logger.debug("[detector] stage1 skipped because backend mode is anime_only")
+            _logger.debug(
+                "[detector] stage1 skipped because backend mode is anime_only"
+            )
             return []
         if self._backend_plan.primary_backend is None:
             return []
@@ -377,11 +346,16 @@ class EspBoxDetector:
             return detections
 
         if self._backend_plan.mode != "yolo_with_anime_fallback":
-            _logger.debug("[detector] stage2 skipped because anime fallback is disabled")
+            _logger.debug(
+                "[detector] stage2 skipped because anime fallback is disabled"
+            )
             return []
 
         person_count = sum(1 for item in stage1_boxes if item.category == "person")
-        should_run = person_count < self._backend_plan.anime_fallback_trigger_count
+        should_run = (
+            self.fallback_policy == "all"
+            or person_count < self._backend_plan.anime_fallback_trigger_count
+        )
         _logger.debug(
             "[detector] stage2 trigger: stage1_person_count=%s trigger_count=%s run=%s",
             person_count,
@@ -405,7 +379,9 @@ class EspBoxDetector:
         except Exception:
             if not self._backend_plan.ignore_secondary_errors:
                 raise
-            _logger.exception("[detector] stage2 anime fallback failed, skipping secondary detections")
+            _logger.exception(
+                "[detector] stage2 anime fallback failed, skipping secondary detections"
+            )
             return []
 
     def _limit_candidates(
@@ -424,99 +400,14 @@ class EspBoxDetector:
             )
         return [self._annotate_stage_box(item, stage_name) for item in limited]
 
-    def _run_stage3(
-        self,
-        image_rgb,
-        *,
-        previous_frame_rgb=None,
-        motion_boxes: list[DetectionBox] | None = None,
-    ) -> list[DetectionBox]:
+    def _run_stage3(self, image_rgb) -> list[DetectionBox]:
         if not self.enable_saliency or self._saliency_backend is None:
-            self._saliency_cache_boxes = []
-            self._saliency_cache_frame_shape = None
-            self._saliency_cache_frame = None
-            self._saliency_cache_valid = False
             return []
-
-        image_shape = tuple(getattr(image_rgb, "shape", ()) or ())
-        previous_shape = tuple(getattr(previous_frame_rgb, "shape", ()) or ())
-        can_reuse = bool(
-            self.saliency_reuse_static_frames
-            and self.enable_saliency
-            and self._saliency_cache_valid
-            and previous_frame_rgb is not None
-            and image_shape
-            and image_shape == previous_shape
-            and image_shape == self._saliency_cache_frame_shape
-            and self._saliency_cache_matches_previous(previous_frame_rgb)
-        )
-        if can_reuse:
-            if self.enable_motion:
-                can_reuse = not motion_boxes
-            else:
-                can_reuse = self._frames_equal(image_rgb, previous_frame_rgb)
-        if can_reuse:
-            _logger.debug(
-                "[detector] stage3 saliency reused cached boxes: shape=%s boxes=%s",
-                image_shape,
-                len(self._saliency_cache_boxes),
-            )
-            self._saliency_cache_frame = image_rgb
-            return list(self._saliency_cache_boxes)
-
         try:
-            detections = self._saliency_backend.detect(image_rgb)
+            return self._saliency_backend.detect(image_rgb)[: self._candidate_limit]
         except Exception:
-            _logger.exception(
-                "[detector] stage3 saliency detection failed, skipping"
-            )
-            self._saliency_cache_boxes = []
-            self._saliency_cache_frame_shape = None
-            self._saliency_cache_frame = None
-            self._saliency_cache_valid = False
+            _logger.exception("[detector] saliency detection failed, skipping")
             return []
-        limited = list(detections)[: self._candidate_limit]
-        if len(limited) < len(detections):
-            _logger.debug(
-                "[detector] stage3 candidate limit applied: kept=%s dropped=%s",
-                len(limited),
-                len(detections) - len(limited),
-            )
-        _logger.debug(
-            "[detector] stage3 detections=%s details=%s",
-            len(limited),
-            self._summarize_detections(limited),
-        )
-        if self.saliency_reuse_static_frames:
-            self._saliency_cache_boxes = list(limited)
-            self._saliency_cache_frame_shape = image_shape or None
-            self._saliency_cache_frame = image_rgb
-            self._saliency_cache_valid = True
-        else:
-            self._saliency_cache_boxes = []
-            self._saliency_cache_frame_shape = None
-            self._saliency_cache_frame = None
-            self._saliency_cache_valid = False
-        return limited
-
-    def _saliency_cache_matches_previous(self, previous_frame_rgb) -> bool:
-        """Avoid reusing boxes from an unrelated concurrent image stream."""
-        if previous_frame_rgb is self._saliency_cache_frame:
-            return True
-        if self._saliency_cache_frame is None:
-            return False
-        return self._frames_equal(previous_frame_rgb, self._saliency_cache_frame)
-
-    def _frames_equal(self, left, right) -> bool:
-        """Compare frame arrays without making cache failures fatal."""
-        try:
-            np = self._load_numpy()
-        except (ImportError, RuntimeError):
-            return False
-        try:
-            return bool(np.array_equal(left, right))
-        except (ImportError, RuntimeError, AttributeError, TypeError, ValueError):
-            return False
 
     def _run_stage4(
         self,
@@ -526,9 +417,7 @@ class EspBoxDetector:
         if not self.enable_motion or self._motion_backend is None:
             return []
         if previous_frame_rgb is None:
-            _logger.debug(
-                "[detector] stage4 motion skipped: no previous frame"
-            )
+            _logger.debug("[detector] stage4 motion skipped: no previous frame")
             return []
         try:
             detections = self._motion_backend.detect(
@@ -536,9 +425,7 @@ class EspBoxDetector:
                 previous_frame_rgb,
             )
         except Exception:
-            _logger.exception(
-                "[detector] stage4 motion detection failed, skipping"
-            )
+            _logger.exception("[detector] stage4 motion detection failed, skipping")
             return []
         limited = list(detections)[: self._candidate_limit]
         if len(limited) < len(detections):

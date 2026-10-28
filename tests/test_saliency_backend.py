@@ -163,8 +163,11 @@ class SaliencyBackendTests(unittest.TestCase):
         backend._input_name = "input"
         backend._input_size = (4, 4)
         image = np.zeros((8, 8, 3), dtype=np.uint8)
+        image[2:5, 2:5] = 255
 
-        threads = [threading.Thread(target=backend._infer, args=(image,)) for _ in range(2)]
+        threads = [
+            threading.Thread(target=backend._infer, args=(image,)) for _ in range(2)
+        ]
         for thread in threads:
             thread.start()
         for thread in threads:
@@ -193,6 +196,35 @@ class SaliencyBackendTests(unittest.TestCase):
         self.assertEqual(options.graph_optimization_level, "all")
         self.assertEqual(options.intra_op_num_threads, 2)
         self.assertEqual(options.inter_op_num_threads, 3)
+
+    def test_near_full_frame_closeup_is_not_rejected(self):
+        raw = np.ones((1, 1, 20, 20), dtype=np.float32)
+        raw[0, 0, 0, :] = 0
+        backend = FakeSaliencyBackend(raw, edge_padding_ratio=0)
+        boxes = backend.detect(np.zeros((100, 100, 3), dtype=np.uint8))
+        self.assertEqual([b.as_tuple() for b in boxes], [(0, 5, 100, 100)])
+
+    def test_dark_image_normalization_matches_reference(self):
+        backend = SaliencyDetectionBackend(model_path="unused")
+        backend._input_size = (2, 2)
+        tensor = backend._prepare_input(np.full((2, 2, 3), 30, dtype=np.uint8))
+        self.assertAlmostEqual(float(tensor[0, 0, 0, 0]), (1 - 0.485) / 0.229, places=5)
+
+    def test_black_image_normalization_is_finite(self):
+        backend = SaliencyDetectionBackend(model_path="unused")
+        self.assertTrue(
+            np.isfinite(
+                backend._prepare_input(np.zeros((8, 8, 3), dtype=np.uint8))
+            ).all()
+        )
+
+    def test_uniform_images_do_not_amplify_model_noise(self):
+        backend = SaliencyDetectionBackend(model_path="unused", auto_download_model=False)
+        for color in ((0, 0, 0), (127, 127, 127), (255, 0, 0)):
+            image = np.empty((8, 8, 3), dtype=np.uint8)
+            image[:] = color
+            self.assertEqual(backend.detect(image), [])
+        self.assertIsNone(backend._session)
 
 
 if __name__ == "__main__":

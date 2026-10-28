@@ -9,11 +9,21 @@ _logger = get_logger(__name__)
 
 
 class EspBoxProcessor:
-    def __init__(self, *, detector, renderer, output_dir: str | Path) -> None:
+    def __init__(
+        self,
+        *,
+        detector,
+        renderer,
+        output_dir: str | Path,
+        gif_detection_interval: int = 4,
+        gif_max_reuse_ms: int = 240,
+    ) -> None:
         self.detector = detector
         self.renderer = renderer
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.gif_detection_interval = max(1, int(gif_detection_interval))
+        self.gif_max_reuse_ms = max(20, int(gif_max_reuse_ms))
 
     def render_path(self, image_path: str) -> str:
         try:
@@ -32,7 +42,9 @@ class EspBoxProcessor:
                 bool(getattr(image, "is_animated", False)),
             )
             if image.format == "GIF" and getattr(image, "is_animated", False):
-                _logger.info("[processor] GIF detected, switching to frame-by-frame render")
+                _logger.info(
+                    "[processor] GIF detected, switching to frame-by-frame render"
+                )
                 return self._render_gif(image_path)
 
         detection_result = self.detector.analyze_from_path(image_path)
@@ -40,14 +52,13 @@ class EspBoxProcessor:
         stage4_boxes = getattr(detection_result, "stage4_boxes", []) or []
         _logger.debug(
             "[processor] detector pipeline: stage1=%s stage2=%s stage2_composite=%s"
-            " stage3=%s stage4=%s arranged=%s random=%s final=%s",
+            " stage3=%s stage4=%s arranged=%s final=%s",
             len(detection_result.stage1_boxes),
             len(detection_result.stage2_boxes),
             len(detection_result.stage2_composite_boxes),
             len(stage3_boxes),
             len(stage4_boxes),
             len(detection_result.arranged_boxes),
-            len(detection_result.random_boxes),
             len(detection_result.final_boxes),
         )
         output_path = self.renderer.render(
@@ -70,6 +81,21 @@ class EspBoxProcessor:
         previous_frame_array = None
         analyze = self.detector.analyze
         accepts_previous_frame = self._supports_previous_frame(analyze)
+        # The stream belongs to this render call, never to the shared detector.
+        from .detector import EspBoxDetector
+        from .temporal import GifDetectionStream
+
+        stream = None
+        if (
+            isinstance(self.detector, EspBoxDetector)
+            and self.gif_detection_interval > 1
+        ):
+            stream = GifDetectionStream(
+                self.detector,
+                interval=self.gif_detection_interval,
+                max_age_ms=self.gif_max_reuse_ms,
+            )
+        previous_duration = 0
 
         with Image.open(image_path) as image:
             base_duration = int(image.info.get("duration", 100) or 100)
@@ -78,11 +104,17 @@ class EspBoxProcessor:
             frame_index = 0
             for frame in ImageSequence.Iterator(image):
                 frame_index += 1
-                duration = int(frame.info.get("duration", base_duration) or base_duration)
+                duration = int(
+                    frame.info.get("duration", base_duration) or base_duration
+                )
                 rgba_frame = frame.convert("RGBA")
                 rgb_frame = rgba_frame.convert("RGB")
                 current_frame_array = np.asarray(rgb_frame)
-                if accepts_previous_frame:
+                if stream is not None:
+                    detection_result = stream.analyze(
+                        current_frame_array, elapsed_ms=previous_duration
+                    )
+                elif accepts_previous_frame:
                     detection_result = analyze(
                         current_frame_array,
                         previous_frame_rgb=previous_frame_array,
@@ -95,7 +127,7 @@ class EspBoxProcessor:
                 stage4_boxes = getattr(detection_result, "stage4_boxes", []) or []
                 _logger.debug(
                     "[processor] GIF frame=%s duration=%sms stage1=%s stage2=%s"
-                    " stage2_composite=%s stage3=%s stage4=%s arranged=%s random=%s final=%s",
+                    " stage2_composite=%s stage3=%s stage4=%s arranged=%s final=%s",
                     frame_index,
                     duration,
                     len(detection_result.stage1_boxes),
@@ -104,14 +136,24 @@ class EspBoxProcessor:
                     len(stage3_boxes),
                     len(stage4_boxes),
                     len(detection_result.arranged_boxes),
-                    len(detection_result.random_boxes),
                     len(detection_result.final_boxes),
                 )
+                _logger.debug(
+                    "[processor] GIF frame=%s decisions=%s timings_ms=%s",
+                    frame_index,
+                    getattr(detection_result, "decisions", {}),
+                    getattr(detection_result, "timings_ms", {}),
+                )
+                # Retain one byte per pixel instead of RGBA for every frame.
+                rendered = self.renderer.draw_boxes(
+                    rgba_frame, detection_result.final_boxes
+                )
                 rendered_frames.append(
-                    self.renderer.draw_boxes(rgba_frame, detection_result.final_boxes)
+                    rendered.convert("P", palette=Image.Palette.ADAPTIVE, colors=256)
                 )
                 durations.append(max(20, duration))
                 previous_frame_array = current_frame_array
+                previous_duration = duration
 
         if not rendered_frames:
             raise RuntimeError("GIF 中没有可处理的帧。")

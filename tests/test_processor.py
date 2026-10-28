@@ -34,7 +34,6 @@ class OldResult:
         self.stage2_boxes = []
         self.stage2_composite_boxes = []
         self.arranged_boxes = []
-        self.random_boxes = []
         self.final_boxes = []
 
 
@@ -58,7 +57,7 @@ class TemporalDetector:
     def analyze(self, image, *, previous_frame_rgb=None):
         self.previous_frames.append(previous_frame_rgb)
         del image
-        return DetectionPipelineResult([], [], [], [], [], [])
+        return DetectionPipelineResult([], [], [], [], [])
 
 
 class ProcessorCompatibilityTests(unittest.TestCase):

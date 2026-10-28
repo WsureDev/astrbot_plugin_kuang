@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections import deque
 from typing import Any
 
 from .logger import get_logger
 from .models import DetectionBox
+from .mask_utils import connected_components
 
 _logger = get_logger(__name__)
 
@@ -221,50 +221,4 @@ class MotionDetectionBackend:
         self,
         binary_mask,
     ) -> list[tuple[int, int, int, int, int]]:
-        np = self.load_numpy()
-        mask = np.ascontiguousarray(binary_mask, dtype=bool).copy()
-        height, width = mask.shape
-        fg_count = int(mask.sum())
-        if fg_count == 0:
-            return []
-        if fg_count / max(1, height * width) > 0.92:
-            return [(0, 0, width - 1, height - 1, fg_count)]
-
-        components: list[tuple[int, int, int, int, int]] = []
-        rows = [row.tolist() for row in mask]
-        for seed_y in range(height):
-            row = rows[seed_y]
-            for seed_x in range(width):
-                if not row[seed_x]:
-                    continue
-                queue: deque[tuple[int, int]] = deque()
-                queue.append((seed_y, seed_x))
-                rows[seed_y][seed_x] = False
-                min_x = max_x = seed_x
-                min_y = max_y = seed_y
-                area = 0
-                while queue:
-                    y, x = queue.popleft()
-                    area += 1
-                    if x < min_x:
-                        min_x = x
-                    if x > max_x:
-                        max_x = x
-                    if y < min_y:
-                        min_y = y
-                    if y > max_y:
-                        max_y = y
-                    if y + 1 < height and rows[y + 1][x]:
-                        rows[y + 1][x] = False
-                        queue.append((y + 1, x))
-                    if y - 1 >= 0 and rows[y - 1][x]:
-                        rows[y - 1][x] = False
-                        queue.append((y - 1, x))
-                    if x + 1 < width and rows[y][x + 1]:
-                        rows[y][x + 1] = False
-                        queue.append((y, x + 1))
-                    if x - 1 >= 0 and rows[y][x - 1]:
-                        rows[y][x - 1] = False
-                        queue.append((y, x - 1))
-                components.append((min_x, min_y, max_x, max_y, area))
-        return components
+        return connected_components(binary_mask)

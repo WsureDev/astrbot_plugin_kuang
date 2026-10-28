@@ -102,11 +102,7 @@ class DetectionArranger:
                     if "head" in part_names and "legs" in part_names
                     else "anime_upper_body"
                 ),
-                priority=(
-                    1
-                    if "head" in part_names and "legs" in part_names
-                    else 2
-                ),
+                priority=(1 if "head" in part_names and "legs" in part_names else 2),
                 composite=True,
             )
             composites.append(union_box)
@@ -140,6 +136,7 @@ class DetectionArranger:
             stage3_boxes=stage3_boxes or [],
             stage4_boxes=stage4_boxes or [],
         )
+        candidates = self._promote_complete_subjects(candidates)
         _logger.debug(
             "[arranger] arrange start: candidates=%s details=%s",
             len(candidates),
@@ -147,7 +144,9 @@ class DetectionArranger:
         )
         selected: list[DetectionBox] = []
         for candidate in sorted(candidates, key=self._selection_sort_key):
-            blocked_by, replacement_indexes = self._resolve_conflicts(candidate, selected)
+            blocked_by, replacement_indexes = self._resolve_conflicts(
+                candidate, selected
+            )
             if blocked_by is not None:
                 _logger.debug(
                     "[arranger] drop candidate because of conflict: candidate=%s conflict=%s iou=%.3f containment=%.3f",
@@ -181,6 +180,47 @@ class DetectionArranger:
             self._summarize(selected),
         )
         return selected
+
+    def _promote_complete_subjects(
+        self, candidates: list[DetectionBox]
+    ) -> list[DetectionBox]:
+        """Let a foreground region complete parts of one character.
+
+        Multiple heads/torsos indicate distinct characters: never collapse
+        those into one foreground rectangle. A standalone close-up head is
+        retained unless a meaningfully larger, aligned subject is available.
+        """
+        parts = {"anime_head", "anime_torso", "anime_legs"}
+        removed: set[int] = set()
+        promoted: dict[int, DetectionBox] = {}
+        for index, foreground in enumerate(candidates):
+            if foreground.semantic_role != "salient":
+                continue
+            overlapping = [
+                (i, box)
+                for i, box in enumerate(candidates)
+                if box.semantic_role in parts
+                and box.area > 0
+                and foreground.intersection_area(box) / box.area >= 0.85
+            ]
+            if any(
+                sum(box.semantic_role == role for _, box in overlapping) > 1
+                for role in ("anime_head", "anime_torso")
+            ):
+                continue
+            eligible = [
+                i
+                for i, box in overlapping
+                if 1.15 <= foreground.area / box.area <= 6.0
+                and self._center_offset_ratio(foreground, box) <= 0.45
+            ]
+            if not eligible:
+                continue
+            promoted[index] = foreground.clone(semantic_role="subject", priority=2)
+            removed.update(eligible)
+        return [
+            promoted.get(i, box) for i, box in enumerate(candidates) if i not in removed
+        ]
 
     def _build_candidates(
         self,
@@ -294,14 +334,18 @@ class DetectionArranger:
         if not self._has_arrangement_conflict(candidate, other):
             return "keep_both"
 
-        if self._is_stage2_humanoid(candidate) and self._is_stage1_humanoid_candidate(other):
+        if self._is_stage2_humanoid(candidate) and self._is_stage1_humanoid_candidate(
+            other
+        ):
             if not self._is_same_target_pair(candidate, other):
                 return "keep_both"
             if self._should_stage2_replace_stage1(candidate, other):
                 return "replace_selected"
             return "drop_candidate"
 
-        if self._is_stage1_humanoid_candidate(candidate) and self._is_stage2_humanoid(other):
+        if self._is_stage1_humanoid_candidate(candidate) and self._is_stage2_humanoid(
+            other
+        ):
             if not self._is_same_target_pair(candidate, other):
                 return "keep_both"
             if self._should_stage2_replace_stage1(other, candidate):
@@ -452,7 +496,9 @@ class DetectionArranger:
             max(anchor.width, part.width),
         )
         horizontal_overlap = max(0, min(anchor.x2, part.x2) - max(anchor.x1, part.x1))
-        horizontal_overlap_ratio = horizontal_overlap / max(1.0, min(anchor.width, part.width))
+        horizontal_overlap_ratio = horizontal_overlap / max(
+            1.0, min(anchor.width, part.width)
+        )
         if center_offset_ratio > 0.95:
             return 0.0
 
@@ -509,8 +555,6 @@ class DetectionArranger:
             return "motion"
         if box.semantic_role == "salient":
             return "salient"
-        if box.category == "random":
-            return "random"
         return "other"
 
     @staticmethod
@@ -530,10 +574,9 @@ class DetectionArranger:
         left: DetectionBox,
         right: DetectionBox,
     ) -> bool:
-        return (
-            self._single_role_alignment_ok(left, right)
-            and self._single_role_alignment_ok(right, left)
-        )
+        return self._single_role_alignment_ok(
+            left, right
+        ) and self._single_role_alignment_ok(right, left)
 
     def _single_role_alignment_ok(
         self,
@@ -546,10 +589,9 @@ class DetectionArranger:
         if role == "anime_legs":
             return part_box.center_y >= other.y1 + (other.height * 0.32)
         if role == "anime_torso":
-            return (
-                part_box.center_y >= other.y1 + (other.height * 0.18)
-                and part_box.center_y <= other.y1 + (other.height * 0.82)
-            )
+            return part_box.center_y >= other.y1 + (
+                other.height * 0.18
+            ) and part_box.center_y <= other.y1 + (other.height * 0.82)
         return True
 
     def _looks_like_stage1_humanoid_guess(
@@ -601,8 +643,9 @@ class DetectionArranger:
             "anime_head": 4,
             "anime_legs": 5,
             "animal": 6,
-            "motion": 7,
-            "salient": 8,
+            "subject": 2,
+            "salient": 7,
+            "motion": 8,
             "other": 9,
         }
         return order.get(role, 9)

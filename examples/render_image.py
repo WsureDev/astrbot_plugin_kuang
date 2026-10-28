@@ -7,7 +7,7 @@
 
 跑一次 processor.render_path，等价于插件收到一张图后走的完整链路：
 Stage1(yolo26n) → Stage2(anime, 可选) → Stage3(saliency, 可选)
- → Stage4(motion, GIF 帧差) → arranger → Stage5(随机补框, 可选)。
+ → Stage4(motion, GIF 帧差) → arranger。
 """
 
 from __future__ import annotations
@@ -91,11 +91,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="关闭 GIF 运动 stage4。",
     )
-    parser.add_argument(
-        "--disable-random",
-        action="store_true",
-        help="关闭随机补框 stage5。",
-    )
     return parser
 
 
@@ -123,18 +118,16 @@ def main() -> int:
     _logger.info("output_dir=%s", output_dir)
     _logger.info("model_dir=%s", model_dir)
     _logger.info(
-        "stages: anime=%s saliency=%s motion=%s random=%s",
+        "stages: anime=%s saliency=%s motion=%s",
         args.anime,
         not args.disable_saliency,
         not args.disable_motion,
-        not args.disable_random,
     )
 
     detector = EspBoxDetector(
         box_count=args.box_count,
         model_path=yolo_model_path,
         auto_download_model=True,
-        enable_random_boxes=not args.disable_random,
         enable_anime_fallback=args.anime,
         anime_model_path=anime_model_path,
         anime_auto_download_model=True,

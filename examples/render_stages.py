@@ -4,7 +4,7 @@
 - 02_stage2_only：只画二次元 Head/Torso/Legs（未合成）
 - 03_stage3_only：只画显著性检测框
 - 04_stage4_only：只画帧差运动框（仅 GIF 有效）
-- 05_merged    ：走完整仲裁的最终结果（关闭随机补框，纯 stage 融合）
+- 05_merged    ：走完整仲裁的最终结果（主体融合）
 
 设计意图是"每帧只跑一次 detector，5 份产物共用同一批候选"，方便对比同一决策下各 stage 的贡献。
 
@@ -268,15 +268,14 @@ def main() -> int:
     _logger.info("output_root=%s", output_root)
     _logger.info("model_dir=%s", model_dir)
     _logger.info(
-        "stage matrix always-on: stage1(yolo26n) + stage2(anime) + stage3(saliency) + stage4(motion), random off"
+        "stage matrix always-on: stage1(yolo26n) + stage2(anime) + stage3(saliency) + stage4(motion)"
     )
 
     detector = EspBoxDetector(
         box_count=args.box_count,
+        fallback_policy="all",
         model_path=yolo_model_path,
         auto_download_model=True,
-        # 关掉随机补框——测试要看的是各 stage 的真实贡献，不需要凑数
-        enable_random_boxes=False,
         # 强制开启 anime，把触发阈值调很高保证每帧都跑一次
         enable_anime_fallback=True,
         anime_model_path=anime_model_path,

@@ -547,9 +547,9 @@ def _render_strategy(
 def _build_detector(model_dir: Path, box_count: int) -> EspBoxDetector:
     return EspBoxDetector(
         box_count=box_count,
+        fallback_policy="all",
         model_path=str(model_dir / "yolo26n.onnx"),
         auto_download_model=True,
-        enable_random_boxes=False,
         enable_anime_fallback=True,
         anime_model_path=str(model_dir / "anime_yolo.onnx"),
         anime_auto_download_model=True,
@@ -822,6 +822,7 @@ def main() -> int:
             output_root=output_root,
             model_dir=model_dir,
             box_count=args.box_count,
+        fallback_policy="all",
             render=not args.no_render,
             temporal_alpha=args.temporal_alpha,
             temporal_fast_threshold=args.temporal_fast_threshold,
