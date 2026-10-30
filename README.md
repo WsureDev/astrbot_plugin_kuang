@@ -19,9 +19,11 @@ AstrBot 自动读取插件根目录的 `logo.png`，无需在 `metadata.yaml` �
 0.9.0 起，首次从 GitHub 安装只获取插件本体，不安装 NumPy、Pillow、ONNX Runtime 或 OpenCV，
 也不下载模型。安装任一识别模块后才能识别画框。
 
-在 AstrBot 的插件视图中打开“[框]模块管理”，点击需要的能力的“安装并启用”。
+在 AstrBot 的插件详情页中打开“[框]模块管理”，点击需要的能力的“安装并启用”。新版也可从侧边栏的插件视图进入。
 页面显示依赖安装、模型下载和加载验证三个阶段，验证通过才启用；已安装模块可以调整设置和关闭。
-完整页面按 [AstrBot 4.29.3 的插件视图接口](https://github.com/AstrBotDevs/AstrBot/blob/v4.29.3/docs/zh/dev/star/guides/plugin-pages.md)适配；没有插件视图入口的旧版使用下方管理员指令。
+页面使用 [AstrBot 4.28.0 的 `pages/` 目录约定](https://github.com/AstrBotDevs/AstrBot/blob/v4.28.0/docs/zh/dev/star/guides/plugin-pages.md)，
+同时兼容 [4.29.3 插件视图](https://github.com/AstrBotDevs/AstrBot/blob/v4.29.3/docs/zh/dev/star/guides/plugin-pages.md)。
+4.28.0 更新插件后，重载插件并刷新 WebUI，再从插件详情页进入；不支持插件页面的更旧版本使用下方管理员指令。
 
 | 模块 | 用途 | 新增资源 |
 | --- | --- | --- |
