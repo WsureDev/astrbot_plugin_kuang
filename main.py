@@ -266,7 +266,7 @@ class KuangPlugin(Star):
             if item["phase"] in {"error", "interrupted", "restart_required"}:
                 line += f"\n  {item['message']}"
             lines.append(line)
-        lines.append("安装进度可在模块管理页面实时查看，或再次发送“框模块 状态”。")
+        lines.append("安装进度可在“[框]模块管理”页面实时查看，或再次发送“框模块 状态”。")
         return "\n".join(lines)
 
     async def terminate(self):
@@ -284,7 +284,7 @@ class KuangPlugin(Star):
             self.modules.is_enabled(key) for key in ("general", "saliency", "anime")
         ):
             yield event.plain_result(
-                "尚未启用识别模块。请在插件的“模块管理”页面安装并启用通用、前景或动漫识别。"
+                "尚未启用识别模块。请在插件的“[框]模块管理”页面安装并启用通用、前景或动漫识别。"
                 "管理员也可发送：框模块 安装 前景；发送“框模块 状态”查看进度。"
             )
             return

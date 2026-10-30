@@ -176,7 +176,7 @@ async function poll() {
 }
 
 if (!bridge) {
-  notice("请从 AstrBot WebUI 的插件视图打开模块管理。旧版可使用管理员指令“框模块 状态”和“框模块 安装 前景”。", true);
+  notice("请从 AstrBot WebUI 的插件视图打开“[框]模块管理”。旧版可使用管理员指令“框模块 状态”和“框模块 安装 前景”。", true);
 } else {
   try {
     const context = await bridge.ready();
@@ -188,6 +188,6 @@ if (!bridge) {
     common.addEventListener("toggle", () => loadSettings(common, "common"));
     await poll();
   } catch (error) {
-    notice(`模块管理连接失败：${error.message}`, true);
+    notice(`[框]模块管理连接失败：${error.message}`, true);
   }
 }

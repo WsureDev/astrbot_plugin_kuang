@@ -1,7 +1,7 @@
 {
   "views": {
     "modules": {
-      "title": "模块管理",
+      "title": "[框]模块管理",
       "description": "按需安装识别能力，查看安装进度并管理设置。"
     }
   }
