@@ -7,7 +7,7 @@
   },
   "enable_auto_animation": {
     "description": "自动框动图总开关",
-    "hint": "默认关闭。开启后，还需在当前群或私聊发送“框动图 开启”，并将回复概率设为大于 0%。支持 GIF 和动态 WebP，不依赖 GIF 加速模块。",
+    "hint": "默认关闭。开启后，还需在当前群或私聊发送“/kuang on”，并将回复概率设为大于 0%。发送“/kuang off”关闭当前渠道。支持 GIF 和动态 WebP，不依赖 GIF 加速模块。",
     "type": "bool",
     "default": false
   },

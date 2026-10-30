@@ -335,14 +335,14 @@ class AutomaticAnimationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_channel_command_persists_into_new_session_and_plugin_reload(self):
         event = self.event(enabled=False)
-        result = await self.collect(self.plugin.kuang_animation(event, "开启"))
+        result = await self.collect(self.plugin.kuang_animation(event, "on"))
         self.assertIn("已开启", result[0][1])
         from core.channel_settings import ChannelSettings
 
         self.plugin.channels = ChannelSettings(self.data)
         newer = self.event([self.image()], session="new", enabled=False)
         self.assertEqual(len(await self.collect(self.plugin.auto_kuang(newer))), 1)
-        await self.collect(self.plugin.kuang_animation(newer, "关闭"))
+        await self.collect(self.plugin.kuang_animation(newer, "off"))
         self.assertEqual(await self.collect(self.plugin.auto_kuang(event)), [])
         self.assertFalse(
             self.plugin.channels.is_enabled(self.plugin.channels.key(newer))
@@ -351,10 +351,23 @@ class AutomaticAnimationTests(unittest.IsolatedAsyncioTestCase):
     async def test_channel_enable_explains_disabled_master_and_zero_probability(self):
         self.config.update(enable_auto_animation=False, auto_animation_probability=0)
         event = self.event(enabled=False)
-        result = await self.collect(self.plugin.kuang_animation(event, "开启"))
+        result = await self.collect(self.plugin.kuang_animation(event, "on"))
         self.assertIn("总开关：已关闭", result[0][1])
         self.assertIn("回复概率：0%", result[0][1])
         self.assertIn("插件配置", result[0][1])
+
+    async def test_channel_status_and_invalid_action_do_not_change_saved_preference(
+        self,
+    ):
+        event = self.event()
+        key = self.plugin.channels.key(event)
+        status = await self.collect(self.plugin.kuang_animation(event))
+        self.assertIn("当前渠道自动框动图：已开启", status[0][1])
+        for action in ("invalid", "开启", "关闭"):
+            response = await self.collect(self.plugin.kuang_animation(event, action))
+            self.assertIn("/kuang on", response[0][1])
+            self.assertIn("/kuang off", response[0][1])
+            self.assertTrue(self.plugin.channels.is_enabled(key))
 
     async def test_invalid_probability_disables_automatic_trigger(self):
         event = self.event([self.image()])

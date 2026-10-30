@@ -286,18 +286,21 @@ class KuangPlugin(Star):
             return 0
         return value if math.isfinite(value) and 0 <= value <= 100 else 0
 
-    @filter.command("框动图")
-    async def kuang_animation(self, event: AstrMessageEvent, action: str = "状态"):
+    @filter.command("kuang")
+    async def kuang_animation(self, event: AstrMessageEvent, action: str = ""):
         key = self.channels.key(event)
         if key is None:
             yield event.plain_result("无法确定当前渠道，请在群聊或私聊中使用此指令。")
             return
-        if action not in {"开启", "启用", "关闭", "状态"}:
-            yield event.plain_result("用法：框动图 开启 / 关闭 / 状态")
+        action = action.strip().lower()
+        if action not in {"on", "off", ""}:
+            yield event.plain_result(
+                "用法：/kuang on 开启，/kuang off 关闭；/kuang 查看状态。"
+            )
             return
-        if action != "状态":
+        if action:
             try:
-                self.channels.set_enabled(key, action in {"开启", "启用"})
+                self.channels.set_enabled(key, action == "on")
             except OSError as exc:
                 _logger.warning("保存自动动图渠道设置失败：%s", exc)
                 yield event.plain_result("渠道设置保存失败，请稍后重试。")
