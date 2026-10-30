@@ -218,16 +218,45 @@ class ModuleManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.manager.is_enabled("general"))
         self.assertEqual(self.installs, [])
 
-    async def test_settings_are_typed_and_cannot_enable_uninstalled_modules(self):
-        with self.assertRaises(ValueError):
-            self.manager.save_settings("general", {"confidence_threshold": 0.4})
-        with self.assertRaises(ValueError):
-            self.manager.save_settings("common", {"enable_general": True})
-        with self.assertRaises(ValueError):
-            self.manager.save_settings("common", {"box_count": "five"})
-        self.manager.save_settings("common", {"box_count": 3})
-        self.assertEqual(self.config["box_count"], 3)
-        self.assertGreater(self.config.saves, 0)
+    async def test_download_page_cannot_change_functional_settings_or_enable_modules(
+        self,
+    ):
+        self.manager.start_install("general")
+        await self.wait()
+        before = dict(self.config)
+        for module, values in (
+            ("general", {"confidence_threshold": 0.4}),
+            ("general", {"enable_general": False}),
+            ("anime", {"anime_model_input_size": 320}),
+            ("saliency", {"saliency_threshold": 0.3}),
+            ("gif", {"gif_detection_interval": 8}),
+            ("common", {"head_only": True}),
+        ):
+            with self.assertRaisesRegex(ValueError, "插件配置"):
+                self.manager.save_settings(module, values)
+        self.assertEqual(self.config, before)
+
+    async def test_download_options_can_be_saved_before_first_install_and_are_used(
+        self,
+    ):
+        self.config.update(head_only=True, auto_animation_probability=37)
+        model = self.data / "custom" / "foreground.onnx"
+        values = {
+            "saliency_model_path": str(model),
+            "saliency_model_url": "https://mirror.example/u2netp.onnx",
+            "saliency_auto_download_model": True,
+        }
+        self.manager.save_settings("saliency", values)
+        self.assertEqual(self.installs, [])
+        self.assertEqual(self.downloads, [])
+        self.manager = self.make_manager()
+        self.manager.start_install("saliency")
+        await self.wait()
+        self.assertEqual(self.downloads, [values["saliency_model_url"]])
+        self.assertEqual(model.read_bytes(), b"valid model")
+        self.assertTrue(self.manager.is_enabled("saliency"))
+        self.assertTrue(self.config["head_only"])
+        self.assertEqual(self.config["auto_animation_probability"], 37)
 
     async def test_existing_model_path_and_install_state_survive_reload(self):
         self.manager.start_install("general")
@@ -252,18 +281,42 @@ class ModuleManagerTests(unittest.IsolatedAsyncioTestCase):
         self.manager = self.make_manager()
         self.assertTrue(all(not self.manager.is_enabled(key) for key in MODULES))
 
-    async def test_automatic_reply_probability_accepts_only_zero_to_one_hundred(self):
-        fields = self.manager.settings("common")
-        self.assertFalse(fields["enable_auto_animation"]["default"])
-        self.assertEqual(fields["auto_animation_probability"]["default"], 0)
-        for value in (0, 12.5, 100):
-            self.manager.save_settings("common", {"auto_animation_probability": value})
-            self.assertEqual(self.config["auto_animation_probability"], value)
-        for value in (-1, 101, float("inf"), float("nan"), True, "50"):
+    async def test_download_options_reject_invalid_types_without_partial_save(self):
+        before = dict(self.config)
+        for values in (
+            {"model_url": 3},
+            {"model_path": None},
+            {
+                "model_url": "https://mirror.example/model.onnx",
+                "auto_download_model": "false",
+            },
+        ):
             with self.assertRaises(ValueError):
-                self.manager.save_settings(
-                    "common", {"auto_animation_probability": value}
-                )
+                self.manager.save_settings("general", values)
+            self.assertEqual(self.config, before)
+
+    async def test_download_fields_do_not_appear_in_native_configuration(self):
+        schema = self.manager._schema
+        for module, spec in MODULES.items():
+            self.assertTrue(schema[spec["flag"]]["invisible"])
+            fields = self.manager.settings(module)
+            expected = (
+                {
+                    spec["prefix"] + suffix
+                    for suffix in ("model_path", "model_url", "auto_download_model")
+                }
+                if spec["file"]
+                else set()
+            )
+            self.assertEqual(set(fields), expected)
+            self.assertTrue(all(schema[key]["invisible"] for key in fields))
+        for key in (
+            "head_only",
+            "auto_animation_probability",
+            "saliency_threshold",
+            "gif_detection_interval",
+        ):
+            self.assertFalse(schema[key].get("invisible", False))
 
 
 class EmptyCoreTests(unittest.TestCase):

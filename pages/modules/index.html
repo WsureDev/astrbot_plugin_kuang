@@ -13,6 +13,7 @@
       <div class="eyebrow">框 / 能力模块</div>
       <h1>需要什么，就开启什么。</h1>
       <p>本体已就绪。安装一个识别模块即可开始画框，共享依赖只安装一次。</p>
+      <p>锁头、自动回复、识别阈值和线框样式请在 AstrBot 的“框”插件配置中调整。</p>
     </header>
     <div id="notice" role="status" aria-live="polite" hidden></div>
     <section class="guide" aria-label="安装说明">
@@ -20,10 +21,6 @@
       <p>常见目标选通用识别，主体不明确选前景识别，动漫大头选动漫识别。GIF 加速可以之后再装。</p>
     </section>
     <section id="modules" class="grid" aria-label="能力模块" aria-busy="true"></section>
-    <details id="common" class="common">
-      <summary>通用设置 <span>锁身 / 锁头、自动动图、线框样式与识别策略</span></summary>
-      <form class="settings" data-module="common"></form>
-    </details>
     <footer>
       模型下载显示实际进度；依赖安装和加载验证显示当前步骤。关闭页面不会中止安装。<br>
       首次安装识别模块需要下载共享运行库，体积取决于系统；关闭模块会保留资源，再开启无需重复下载。
@@ -40,7 +37,7 @@
       </div>
       <p class="message"></p>
       <div class="actions"><button type="button" class="primary"></button></div>
-      <details class="module-settings" hidden><summary>模块设置</summary><form class="settings"></form></details>
+      <details class="download-options" hidden><summary>下载选项</summary><form class="settings"></form></details>
       <details class="logs" hidden><summary>安装日志</summary><pre></pre></details>
     </article>
   </template>

@@ -212,7 +212,7 @@ class KuangPlugin(Star):
             body = await self._request_json()
             if not isinstance(body, dict):
                 raise ValueError("请求必须是 JSON 对象。")
-            module_id = body.get("module", "common")
+            module_id = body.get("module")
             if "values" in body:
                 return self.modules.save_settings(module_id, body["values"])
             return self.modules.settings(module_id)
@@ -312,7 +312,7 @@ class KuangPlugin(Star):
         ]
         if enabled and (not master or probability == 0):
             lines.append(
-                "请在“[框]模块管理”的通用设置中打开自动动图总开关，并设置大于 0% 的回复概率。"
+                "请在 AstrBot 的“框”插件配置中打开自动动图总开关，并设置大于 0% 的回复概率。"
             )
         if enabled and not self._has_recognition_module():
             lines.append(
@@ -364,7 +364,7 @@ class KuangPlugin(Star):
             if self.config.get("head_only", False):
                 yield event.plain_result(
                     "锁头模式需要安装并启用动漫识别模块。"
-                    "请在“[框]模块管理”中启用动漫识别，或关闭通用设置中的“锁头模式”恢复锁身。"
+                    "请在“[框]模块管理”中启用动漫识别，或在插件配置中关闭“锁头模式”恢复锁身。"
                     "管理员也可发送：框模块 安装 动漫。"
                 )
                 return

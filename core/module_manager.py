@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import threading
 import time
 from pathlib import Path
@@ -53,27 +52,7 @@ MODULES = {
 }
 _ACTIVE_PHASES = {"queued", "installing", "downloading", "validating"}
 _ROOT = Path(__file__).resolve().parents[1]
-_COMMON_SETTINGS = {
-    "head_only",
-    "enable_auto_animation",
-    "auto_animation_probability",
-    "box_count",
-    "line_width",
-    "line_alpha",
-    "avatar_url_template",
-    "debug_mode",
-    "fallback_policy",
-    "inference_num_threads",
-    "max_concurrent_images",
-}
-_GENERAL_SETTINGS = {
-    "confidence_threshold",
-    "detector_iou_threshold",
-    "model_input_size",
-    "model_path",
-    "model_url",
-    "auto_download_model",
-}
+_DOWNLOAD_SETTINGS = ("model_path", "model_url", "auto_download_model")
 
 
 class ModuleManager:
@@ -372,16 +351,13 @@ class ModuleManager:
 
     def settings(self, module_id: str) -> dict:
         if module_id == "common":
-            keys = _COMMON_SETTINGS
-        elif module_id == "general":
-            keys = _GENERAL_SETTINGS
-        else:
-            spec = self._spec(module_id)
-            keys = {key for key in self._schema if key.startswith(spec["prefix"])}
-            if module_id == "gif":
-                keys |= {key for key in self._schema if key.startswith("motion_")} | {
-                    "enable_motion"
-                }
+            raise ValueError("功能参数请在 AstrBot 的插件配置中修改。")
+        spec = self._spec(module_id)
+        keys = (
+            {f"{spec['prefix']}{suffix}" for suffix in _DOWNLOAD_SETTINGS}
+            if spec["file"]
+            else set()
+        )
         return {
             key: {
                 **self._schema[key],
@@ -393,41 +369,28 @@ class ModuleManager:
 
     def save_settings(self, module_id: str, values: dict) -> dict:
         if self._tasks:
-            raise ValueError("安装过程中请等待任务结束再修改设置。")
-        if module_id != "common" and not self._assets_present(module_id):
-            raise ValueError("请先安装该模块，再调整设置。")
+            raise ValueError("安装过程中请等待任务结束再修改下载选项。")
         fields = self.settings(module_id)
         if not isinstance(values, dict) or not values.keys() <= fields.keys():
-            raise ValueError("包含不支持的设置项。")
+            raise ValueError("仅支持下载选项；功能参数请在插件配置中修改。")
         for key, value in values.items():
             kind = fields[key]["type"]
-            valid = (
-                (kind == "bool" and type(value) is bool)
-                or (kind == "int" and type(value) is int)
-                or (
-                    kind == "float"
-                    and type(value) in (int, float)
-                    and math.isfinite(value)
-                )
-                or (kind == "string" and isinstance(value, str))
+            valid = (kind == "bool" and type(value) is bool) or (
+                kind == "string" and isinstance(value, str)
             )
             if not valid:
                 raise ValueError(f"{fields[key]['description']} 的值类型不正确。")
-            if key == "fallback_policy" and value not in {"adaptive", "all"}:
-                raise ValueError("补强策略必须是 adaptive 或 all。")
-            if key == "auto_animation_probability" and not 0 <= value <= 100:
-                raise ValueError("自动动图回复概率必须在 0–100% 之间。")
         previous = dict(self.config)
+        spec = self._spec(module_id)
+        path_key = f"{spec['prefix']}model_path"
+        path_changed = path_key in values and values[path_key] != previous.get(
+            path_key, ""
+        )
         try:
             self.config.update(values)
-            if module_id != "common":
-                spec = self._spec(module_id)
-                path_key = f"{spec['prefix']}model_path"
-                if path_key in values and values[path_key] != previous.get(
-                    path_key, ""
-                ):
-                    # A different file must pass validation before it is used.
-                    self.config[spec["flag"]] = False
+            if path_changed:
+                # A different file must pass validation before it is used.
+                self.config[spec["flag"]] = False
             self.on_change()
             self._save_config()
         except Exception:
@@ -435,11 +398,7 @@ class ModuleManager:
             self.config.update(previous)
             self.on_change()
             raise
-        if (
-            module_id != "common"
-            and path_key in values
-            and values[path_key] != previous.get(path_key, "")
-        ):
+        if path_changed:
             self._update(
                 module_id,
                 phase="idle",

@@ -178,14 +178,16 @@ class PluginModuleTests(unittest.IsolatedAsyncioTestCase):
         self.plugin._configure_pipeline()
         original_config = dict(self.config)
         original_processor = self.plugin.processor
-        self.plugin.modules.save_settings("common", {"head_only": True})
+        self.config["head_only"] = True
+        self.plugin._configure_pipeline()
         self.assertTrue(self.plugin.detector.head_only)
         self.assertTrue(self.plugin._has_recognition_module())
         self.assertEqual(self.plugin.processor.gif_detection_interval, 4)
         self.assertIsNot(self.plugin.processor, original_processor)
         self.assertFalse(original_processor.detector.head_only)
         self.assertEqual(self.config, {**original_config, "head_only": True})
-        self.plugin.modules.save_settings("common", {"head_only": False})
+        self.config["head_only"] = False
+        self.plugin._configure_pipeline()
         self.assertFalse(self.plugin.detector.head_only)
         self.assertEqual(self.config, original_config)
 
@@ -352,7 +354,7 @@ class AutomaticAnimationTests(unittest.IsolatedAsyncioTestCase):
         result = await self.collect(self.plugin.kuang_animation(event, "开启"))
         self.assertIn("总开关：已关闭", result[0][1])
         self.assertIn("回复概率：0%", result[0][1])
-        self.assertIn("通用设置", result[0][1])
+        self.assertIn("插件配置", result[0][1])
 
     async def test_invalid_probability_disables_automatic_trigger(self):
         event = self.event([self.image()])

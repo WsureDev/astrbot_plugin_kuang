@@ -19,12 +19,14 @@
     "slider": {"min": 0, "max": 100, "step": 1}
   },
   "enable_general": {
+    "invisible": true,
     "description": "启用通用识别",
     "hint": "先在模块管理页面安装并启用。关闭时保留已安装资源。",
     "type": "bool",
     "default": false
   },
   "enable_gif_acceleration": {
+    "invisible": true,
     "description": "启用 GIF 加速",
     "hint": "先安装 GIF 加速模块。关闭时仍可逐帧识别 GIF。",
     "type": "bool",
@@ -62,42 +64,49 @@
     "invisible": true
   },
   "model_path": {
+    "invisible": true,
     "description": "YOLO26n 模型文件路径",
     "hint": "留空使用插件数据目录下的默认模型路径；可指定已有 ONNX 模型文件。",
     "type": "string",
     "default": ""
   },
   "model_url": {
+    "invisible": true,
     "description": "YOLO26n 模型下载地址",
     "hint": "模块安装时使用的模型下载地址，支持自行配置镜像。已有有效模型会直接复用。",
     "type": "string",
     "default": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.onnx"
   },
   "auto_download_model": {
+    "invisible": true,
     "description": "自动下载 YOLO26n 模型",
     "hint": "仅在点击“安装并启用”时下载缺失或损坏的模型。关闭后需要手动放置模型；处理图片不会自动下载。",
     "type": "bool",
     "default": true
   },
   "enable_anime_fallback": {
+    "invisible": true,
     "description": "启用动漫识别",
     "hint": "先在模块管理页面安装并启用。保留 Head / Torso / Legs 检测，也可以单独使用，支持大头特写。",
     "type": "bool",
     "default": false
   },
   "anime_model_path": {
+    "invisible": true,
     "description": "动漫 YOLO 模型文件路径",
     "hint": "留空使用插件数据目录下的默认模型路径；可指定已有 ONNX 模型文件。",
     "type": "string",
     "default": ""
   },
   "anime_model_url": {
+    "invisible": true,
     "description": "动漫 YOLO 模型下载地址",
     "hint": "模块安装时使用的模型下载地址，支持自行配置镜像。已有有效模型会直接复用。",
     "type": "string",
     "default": "https://huggingface.co/laowanglaowang/yolov11m_anime_Image_segmentation/resolve/main/best.onnx"
   },
   "anime_auto_download_model": {
+    "invisible": true,
     "description": "自动下载动漫 YOLO 模型",
     "hint": "仅在点击“安装并启用”时下载缺失或损坏的模型。关闭后需要手动放置模型；处理图片不会自动下载。",
     "type": "bool",
@@ -134,24 +143,28 @@
     "default": 0.45
   },
   "enable_saliency": {
+    "invisible": true,
     "description": "启用前景识别",
     "hint": "先在模块管理页面安装并启用。适合主体不明确的图片、卡通和玩偶。",
     "type": "bool",
     "default": false
   },
   "saliency_model_path": {
+    "invisible": true,
     "description": "显著性模型文件路径",
     "hint": "留空使用插件数据目录下的默认模型路径；可指定已有 ONNX 模型文件。",
     "type": "string",
     "default": ""
   },
   "saliency_model_url": {
+    "invisible": true,
     "description": "显著性模型下载地址",
     "hint": "模块安装时使用的模型下载地址，支持自行配置镜像。已有有效模型会直接复用。",
     "type": "string",
     "default": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx"
   },
   "saliency_auto_download_model": {
+    "invisible": true,
     "description": "自动下载显著性模型",
     "hint": "仅在点击“安装并启用”时下载缺失或损坏的模型。关闭后需要手动放置模型；处理图片不会自动下载。",
     "type": "bool",

@@ -32,7 +32,7 @@ async function perform(id, action, button) {
   }
 }
 
-async function loadSettings(details, id) {
+async function loadDownloadOptions(details, id) {
   const form = details.querySelector("form");
   if (!details.open || form.dataset.loaded) return;
   form.dataset.loaded = "loading";
@@ -45,26 +45,15 @@ async function loadSettings(details, id) {
       const title = document.createElement("span");
       title.className = "field-title";
       title.textContent = field.description;
-      const input = document.createElement(key === "fallback_policy" ? "select" : "input");
+      const input = document.createElement("input");
       input.name = key;
       input.dataset.kind = field.type;
-      if (key === "fallback_policy") {
-        for (const [value, name] of [["adaptive", "按需补强"], ["all", "运行全部已启用模型"]]) {
-          input.add(new Option(name, value));
-        }
-        input.value = field.value;
-      } else if (field.type === "bool") {
+      if (field.type === "bool") {
         input.type = "checkbox";
         input.checked = field.value;
       } else {
-        input.type = ["int", "float"].includes(field.type) ? "number" : "text";
-        input.step = field.type === "float" ? "any" : "1";
+        input.type = "text";
         input.value = field.value;
-        input.required = input.type === "number";
-        if (field.slider) {
-          input.min = field.slider.min;
-          input.max = field.slider.max;
-        }
       }
       const hint = document.createElement("small");
       hint.textContent = field.hint || "";
@@ -73,21 +62,21 @@ async function loadSettings(details, id) {
     }
     const save = document.createElement("button");
     save.type = "submit";
-    save.textContent = "保存设置";
+    save.textContent = "保存下载选项";
     save.className = "primary";
     save.disabled = busy;
     form.append(save);
     form.onsubmit = async (event) => {
       event.preventDefault();
       const values = {};
-      for (const input of form.querySelectorAll("input, select")) {
+      for (const input of form.querySelectorAll("input")) {
         values[input.name] = input.dataset.kind === "bool" ? input.checked
-          : ["int", "float"].includes(input.dataset.kind) ? Number(input.value) : input.value;
+          : input.value;
       }
       save.disabled = true;
       try {
         await bridge.apiPost("modules/settings", { module: id, values });
-        notice("设置已保存并生效。");
+        notice("下载选项已保存。点击安装或启用模块后开始验证资源。");
         render(await bridge.apiGet("modules"));
       } catch (error) {
         notice(error.message, true);
@@ -116,8 +105,8 @@ function render(state) {
       card.querySelector(".size").textContent = item.model_bytes
         ? `模型约 ${size(item.model_bytes)} · 共享运行库按需安装`
         : "需要 OpenCV · 安装体积随系统变化";
-      const settings = card.querySelector(".module-settings");
-      settings.addEventListener("toggle", () => loadSettings(settings, item.id));
+      const settings = card.querySelector(".download-options");
+      settings.addEventListener("toggle", () => loadDownloadOptions(settings, item.id));
       container.append(card);
       cards.set(item.id, card);
     }
@@ -154,7 +143,7 @@ function render(state) {
       : failed ? "重试安装并启用" : item.installed ? "启用模块" : "安装并启用";
     button.className = item.enabled ? "secondary" : "primary";
     button.onclick = () => perform(item.id, item.enabled ? "disable" : item.installed && !failed ? "enable" : "install", button);
-    card.querySelector(".module-settings").hidden = !item.installed;
+    card.querySelector(".download-options").hidden = !item.model_bytes;
     const log = card.querySelector(".logs");
     log.hidden = !item.logs.length;
     const pre = log.querySelector("pre");
@@ -188,8 +177,6 @@ if (!bridge) {
     theme(context);
     const off = bridge.onContext(theme);
     window.addEventListener("beforeunload", () => { stopped = true; off(); });
-    const common = document.getElementById("common");
-    common.addEventListener("toggle", () => loadSettings(common, "common"));
     await poll();
   } catch (error) {
     notice(`[框]模块管理连接失败：${error.message}`, true);
