@@ -7,6 +7,13 @@ AstrBot 插件“框”：识别图片、头像和 GIF 中的主体，绘制 FPS
 - 支持多图，逐张处理后分别回图；触发前会过滤常见 Unicode 隐形控制字符。
 - 默认最多保留 5 个主体框，可用 `box_count` 调整。没有可靠主体时不绘框。
 
+## 插件图标
+
+AstrBot 自动读取插件根目录的 `logo.png`，无需在 `metadata.yaml` 中添加图标字段。
+按[官方约定](https://docs.astrbot.app/dev/star/plugin-new.html)，图标保持 1:1，推荐 256×256 像素。
+仓库中的 `logo.png` 为正式插件图标；更换时直接替换同名 PNG，并随插件代码提交即可。
+更新后在 AstrBot 插件页重载“框”，再刷新页面。
+
 ## 安装与模块管理
 
 0.9.0 起，首次从 GitHub 安装只获取插件本体，不安装 NumPy、Pillow、ONNX Runtime 或 OpenCV，
