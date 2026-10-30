@@ -252,6 +252,19 @@ class ModuleManagerTests(unittest.IsolatedAsyncioTestCase):
         self.manager = self.make_manager()
         self.assertTrue(all(not self.manager.is_enabled(key) for key in MODULES))
 
+    async def test_automatic_reply_probability_accepts_only_zero_to_one_hundred(self):
+        fields = self.manager.settings("common")
+        self.assertFalse(fields["enable_auto_animation"]["default"])
+        self.assertEqual(fields["auto_animation_probability"]["default"], 0)
+        for value in (0, 12.5, 100):
+            self.manager.save_settings("common", {"auto_animation_probability": value})
+            self.assertEqual(self.config["auto_animation_probability"], value)
+        for value in (-1, 101, float("inf"), float("nan"), True, "50"):
+            with self.assertRaises(ValueError):
+                self.manager.save_settings(
+                    "common", {"auto_animation_probability": value}
+                )
+
 
 class EmptyCoreTests(unittest.TestCase):
     def test_plugin_loads_without_optional_site_packages(self):

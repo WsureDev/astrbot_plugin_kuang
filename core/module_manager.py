@@ -54,6 +54,8 @@ MODULES = {
 _ACTIVE_PHASES = {"queued", "installing", "downloading", "validating"}
 _ROOT = Path(__file__).resolve().parents[1]
 _COMMON_SETTINGS = {
+    "enable_auto_animation",
+    "auto_animation_probability",
     "box_count",
     "line_width",
     "line_alpha",
@@ -412,6 +414,8 @@ class ModuleManager:
                 raise ValueError(f"{fields[key]['description']} 的值类型不正确。")
             if key == "fallback_policy" and value not in {"adaptive", "all"}:
                 raise ValueError("补强策略必须是 adaptive 或 all。")
+            if key == "auto_animation_probability" and not 0 <= value <= 100:
+                raise ValueError("自动动图回复概率必须在 0–100% 之间。")
         previous = dict(self.config)
         try:
             self.config.update(values)

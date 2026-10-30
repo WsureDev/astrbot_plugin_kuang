@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import math
+import random
 import re
 
 from astrbot.api import logger
@@ -16,6 +18,7 @@ from .core import (
     get_logger,
 )
 from .core.module_manager import ModuleManager
+from .core.channel_settings import ChannelSettings
 
 _PLUGIN_NAME = "astrbot_plugin_kuang"
 _DEFAULT_QQ_AVATAR = "https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
@@ -46,6 +49,7 @@ class KuangPlugin(Star):
         self.model_dir = self.plugin_data_dir / "models"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.model_dir.mkdir(parents=True, exist_ok=True)
+        self.channels = ChannelSettings(self.plugin_data_dir)
 
         self.modules = ModuleManager(
             self.plugin_data_dir, self.config, self._configure_pipeline
@@ -266,11 +270,78 @@ class KuangPlugin(Star):
             if item["phase"] in {"error", "interrupted", "restart_required"}:
                 line += f"\n  {item['message']}"
             lines.append(line)
-        lines.append("安装进度可在“[框]模块管理”页面实时查看，或再次发送“框模块 状态”。")
+        lines.append(
+            "安装进度可在“[框]模块管理”页面实时查看，或再次发送“框模块 状态”。"
+        )
         return "\n".join(lines)
 
     async def terminate(self):
         await self.modules.close()
+
+    def _auto_animation_probability(self) -> float:
+        try:
+            value = float(self.config.get("auto_animation_probability", 0))
+        except (TypeError, ValueError):
+            return 0
+        return value if math.isfinite(value) and 0 <= value <= 100 else 0
+
+    @filter.command("框动图")
+    async def kuang_animation(self, event: AstrMessageEvent, action: str = "状态"):
+        key = self.channels.key(event)
+        if key is None:
+            yield event.plain_result("无法确定当前渠道，请在群聊或私聊中使用此指令。")
+            return
+        if action not in {"开启", "启用", "关闭", "状态"}:
+            yield event.plain_result("用法：框动图 开启 / 关闭 / 状态")
+            return
+        if action != "状态":
+            try:
+                self.channels.set_enabled(key, action in {"开启", "启用"})
+            except OSError as exc:
+                _logger.warning("保存自动动图渠道设置失败：%s", exc)
+                yield event.plain_result("渠道设置保存失败，请稍后重试。")
+                return
+        enabled = self.channels.is_enabled(key)
+        master = bool(self.config.get("enable_auto_animation", False))
+        probability = self._auto_animation_probability()
+        lines = [
+            f"当前渠道自动框动图：{'已开启' if enabled else '已关闭'}",
+            f"总开关：{'已开启' if master else '已关闭'}；回复概率：{probability:g}%",
+            "同一渠道的新会话继承此设置。",
+        ]
+        if enabled and (not master or probability == 0):
+            lines.append(
+                "请在“[框]模块管理”的通用设置中打开自动动图总开关，并设置大于 0% 的回复概率。"
+            )
+        if enabled and not self._has_recognition_module():
+            lines.append("还需安装并启用至少一个识别模块。")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def auto_kuang(self, event: AstrMessageEvent):
+        if not self.config.get("enable_auto_animation", False):
+            return
+        probability = self._auto_animation_probability()
+        if probability <= 0 or not self._has_recognition_module():
+            return
+        if not self.channels.is_enabled(self.channels.key(event)):
+            return
+        if self._matches_kuang_trigger(event):
+            return  # The explicit command owns this message, regardless of probability.
+        if event.get_self_id() and event.get_sender_id() == event.get_self_id():
+            return
+        if not self._collect_direct_images(event):
+            return
+        # Sample once per message, before downloads and decoding. Never affects boxes.
+        if probability < 100 and random.random() * 100 >= probability:
+            return
+        async for result in self._do_kuang(event, automatic=True):
+            yield result
+
+    def _has_recognition_module(self) -> bool:
+        return any(
+            self.modules.is_enabled(key) for key in ("general", "saliency", "anime")
+        )
 
     @filter.regex(r"框")
     async def kuang(self, event: AstrMessageEvent):
@@ -279,17 +350,19 @@ class KuangPlugin(Star):
         async for result in self._do_kuang(event):
             yield result
 
-    async def _do_kuang(self, event: AstrMessageEvent):
-        if not any(
-            self.modules.is_enabled(key) for key in ("general", "saliency", "anime")
-        ):
+    async def _do_kuang(self, event: AstrMessageEvent, *, automatic: bool = False):
+        if not self._has_recognition_module():
+            if automatic:
+                return
             yield event.plain_result(
                 "尚未启用识别模块。请在插件的“[框]模块管理”页面安装并启用通用、前景或动漫识别。"
                 "管理员也可发送：框模块 安装 前景；发送“框模块 状态”查看进度。"
             )
             return
         direct_images = self._collect_direct_images(event)
-        reply_images = [] if direct_images else self._collect_reply_images(event)
+        reply_images = (
+            [] if direct_images or automatic else self._collect_reply_images(event)
+        )
         image_targets = direct_images or reply_images
         avatar_mode = False
         _logger.debug(
@@ -298,6 +371,8 @@ class KuangPlugin(Star):
         )
 
         if not image_targets:
+            if automatic:
+                return
             avatar_target = self._build_avatar_target(event)
             if avatar_target is None:
                 yield event.plain_result(
@@ -312,9 +387,13 @@ class KuangPlugin(Star):
         last_error_message = ""
         for image_target in image_targets:
             try:
-                input_path = await image_target.convert_to_file_path()
-                _logger.debug(f"processing image target: {input_path}")
                 async with self._processing_slots:
+                    input_path = await image_target.convert_to_file_path()
+                    if automatic and not await asyncio.to_thread(
+                        EspBoxProcessor.is_supported_animation, input_path
+                    ):
+                        continue
+                    _logger.debug(f"processing image target: {input_path}")
                     output_path = await asyncio.to_thread(
                         self.processor.render_path,
                         input_path,
@@ -332,6 +411,8 @@ class KuangPlugin(Star):
                 )
 
         if not output_paths:
+            if automatic:
+                return
             fallback_message = "❌ 图片处理失败。"
             if last_error_message:
                 fallback_message = f"❌ 图片处理失败：{last_error_message}"

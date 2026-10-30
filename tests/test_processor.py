@@ -130,6 +130,38 @@ class ProcessorCompatibilityTests(unittest.TestCase):
             self.assertIsNotNone(detector.previous_frames[1])
             self.assertEqual(renderer.gif_call[1], [40, 60])
 
+    def test_animated_webp_preserves_frames_durations_and_loop_as_gif(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "animation.bin"
+            Image.new("RGB", (12, 10), "red").save(
+                path,
+                format="WEBP",
+                save_all=True,
+                append_images=[Image.new("RGB", (12, 10), "blue")],
+                duration=[40, 90],
+                loop=3,
+                lossless=True,
+            )
+            detector = OldDetector()
+            renderer = FakeRenderer(root / "output.gif")
+            processor = EspBoxProcessor(
+                detector=detector, renderer=renderer, output_dir=root / "out"
+            )
+            self.assertTrue(processor.is_supported_animation(str(path)))
+            processor.render_path(str(path))
+            self.assertEqual([kind for kind, _ in detector.calls], ["frame", "frame"])
+            self.assertEqual(renderer.gif_call[1], [40, 90])
+            self.assertEqual(renderer.gif_call[2], 3)
+
+    def test_static_webp_and_single_frame_gif_are_not_automatic_candidates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for format in ("PNG", "WEBP", "GIF"):
+                path = root / format
+                Image.new("RGB", (8, 8), "red").save(path, format=format)
+                self.assertFalse(EspBoxProcessor.is_supported_animation(str(path)))
+
 
 if __name__ == "__main__":
     unittest.main()

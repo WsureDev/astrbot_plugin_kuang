@@ -1,4 +1,17 @@
 {
+  "enable_auto_animation": {
+    "description": "自动框动图总开关",
+    "hint": "默认关闭。开启后，还需在当前群或私聊发送“框动图 开启”，并将回复概率设为大于 0%。支持 GIF 和动态 WebP，不依赖 GIF 加速模块。",
+    "type": "bool",
+    "default": false
+  },
+  "auto_animation_probability": {
+    "description": "自动动图回复概率（%）",
+    "hint": "填写 0–100，表示每条含动图消息自动回复的百分比概率。0 不自动回复，100 每条都回复；静态图不触发，手动“框”不受影响。",
+    "type": "float",
+    "default": 0,
+    "slider": {"min": 0, "max": 100, "step": 1}
+  },
   "enable_general": {
     "description": "启用通用识别",
     "hint": "先在模块管理页面安装并启用。关闭时保留已安装资源。",

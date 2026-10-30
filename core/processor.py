@@ -9,6 +9,15 @@ _logger = get_logger(__name__)
 
 
 class EspBoxProcessor:
+    @staticmethod
+    def is_supported_animation(image_path: str) -> bool:
+        from PIL import Image
+
+        with Image.open(image_path) as image:
+            return image.format in {"GIF", "WEBP"} and bool(
+                getattr(image, "is_animated", False)
+            )
+
     def __init__(
         self,
         *,
@@ -29,7 +38,9 @@ class EspBoxProcessor:
         try:
             from PIL import Image
         except ImportError as exc:
-            raise RuntimeError("缺少 Pillow 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。") from exc
+            raise RuntimeError(
+                "缺少 Pillow 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。"
+            ) from exc
 
         _logger.debug("[processor] render_path start: %s", image_path)
         with Image.open(image_path) as image:
@@ -41,11 +52,12 @@ class EspBoxProcessor:
                 image.height,
                 bool(getattr(image, "is_animated", False)),
             )
-            if image.format == "GIF" and getattr(image, "is_animated", False):
+            if image.format in {"GIF", "WEBP"} and getattr(image, "is_animated", False):
                 _logger.info(
-                    "[processor] GIF detected, switching to frame-by-frame render"
+                    "[processor] %s animation detected, switching to frame-by-frame render",
+                    image.format,
                 )
-                return self._render_gif(image_path)
+                return self._render_animation(image_path)
 
         detection_result = self.detector.analyze_from_path(image_path)
         stage3_boxes = getattr(detection_result, "stage3_boxes", []) or []
@@ -69,12 +81,14 @@ class EspBoxProcessor:
         _logger.debug("[processor] render_path done: output=%s", output_path)
         return output_path
 
-    def _render_gif(self, image_path: str) -> str:
+    def _render_animation(self, image_path: str) -> str:
         try:
             import numpy as np
             from PIL import Image, ImageSequence
         except ImportError as exc:
-            raise RuntimeError("缺少图片处理依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。") from exc
+            raise RuntimeError(
+                "缺少图片处理依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。"
+            ) from exc
 
         rendered_frames = []
         durations: list[int] = []
@@ -104,10 +118,11 @@ class EspBoxProcessor:
             frame_index = 0
             for frame in ImageSequence.Iterator(image):
                 frame_index += 1
+                # WebP exposes this frame's duration only after decoding it.
+                rgba_frame = frame.convert("RGBA")
                 duration = int(
                     frame.info.get("duration", base_duration) or base_duration
                 )
-                rgba_frame = frame.convert("RGBA")
                 rgb_frame = rgba_frame.convert("RGB")
                 current_frame_array = np.asarray(rgb_frame)
                 if stream is not None:

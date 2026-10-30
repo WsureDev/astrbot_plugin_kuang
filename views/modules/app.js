@@ -61,6 +61,10 @@ async function loadSettings(details, id) {
         input.step = field.type === "float" ? "any" : "1";
         input.value = field.value;
         input.required = input.type === "number";
+        if (field.slider) {
+          input.min = field.slider.min;
+          input.max = field.slider.max;
+        }
       }
       const hint = document.createElement("small");
       hint.textContent = field.hint || "";

@@ -36,6 +36,7 @@ class ConfigSchemaTests(unittest.TestCase):
 
         self.assertTrue(expected.issubset(schema))
         for flag in (
+            "enable_auto_animation",
             "enable_general",
             "enable_saliency",
             "enable_anime_fallback",
@@ -43,6 +44,7 @@ class ConfigSchemaTests(unittest.TestCase):
         ):
             self.assertFalse(schema[flag]["default"])
         self.assertFalse(schema["enable_motion"]["default"])
+        self.assertEqual(schema["auto_animation_probability"]["default"], 0)
         self.assertFalse(schema["saliency_preserve_aspect_ratio"]["default"])
         self.assertEqual(schema["saliency_max_foreground_ratio"]["default"], 0.995)
         self.assertEqual(schema["saliency_intra_op_num_threads"]["default"], 0)

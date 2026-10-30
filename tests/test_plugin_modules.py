@@ -6,7 +6,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,6 +40,8 @@ def load_plugin(data_dir):
                 regex=decorator,
                 command=decorator,
                 permission_type=decorator,
+                event_message_type=decorator,
+                EventMessageType=types.SimpleNamespace(ALL="all"),
                 PermissionType=types.SimpleNamespace(ADMIN="admin"),
             ),
         ),
@@ -160,3 +162,158 @@ class PluginModuleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 400)
         self.assertEqual(body["status"], "error")
         self.assertEqual(len((await self.plugin._api_modules())["modules"]), 4)
+
+
+class AutomaticAnimationTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await PluginModuleTests.asyncSetUp(self)
+        PluginModuleTests.add_model(self, "saliency")
+        self.config.update(
+            enable_saliency=True,
+            enable_auto_animation=True,
+            auto_animation_probability=100,
+        )
+        self.plugin.processor.render_path = Mock(
+            return_value=str(self.data / "out.gif")
+        )
+
+    async def asyncTearDown(self):
+        await PluginModuleTests.asyncTearDown(self)
+
+    def image(self, format="GIF", animated=True):
+        from PIL import Image
+
+        path = self.data / f"input-{format}-{animated}.bin"
+        first = Image.new("RGB", (8, 8), "red")
+        kwargs = {"format": format}
+        if animated:
+            kwargs.update(
+                save_all=True,
+                append_images=[Image.new("RGB", (8, 8), "blue")],
+                duration=40,
+            )
+        first.save(path, **kwargs)
+        component = self.module.Image()
+        component.convert_to_file_path = AsyncMock(return_value=str(path))
+        return component
+
+    def event(self, images=(), text="", sender="alice", session="first", enabled=True):
+        event = types.SimpleNamespace(
+            get_messages=lambda: images,
+            get_message_str=lambda: text,
+            get_platform_id=lambda: "webchat",
+            get_group_id=lambda: "",
+            get_sender_id=lambda: sender,
+            get_self_id=lambda: "bot",
+            session_id=session,
+            plain_result=lambda text: ("text", text),
+            image_result=lambda path: ("image", path),
+            track_temporary_local_file=Mock(),
+        )
+        if enabled:
+            self.plugin.channels.set_enabled(self.plugin.channels.key(event), True)
+        return event
+
+    async def collect(self, handler):
+        return [result async for result in handler]
+
+    async def test_master_channel_probability_and_missing_module_skip_without_download(
+        self,
+    ):
+        image = self.image()
+        event = self.event([image], enabled=False)
+        self.assertEqual(await self.collect(self.plugin.auto_kuang(event)), [])
+        self.plugin.channels.set_enabled(self.plugin.channels.key(event), True)
+        for config in (
+            {"enable_auto_animation": False},
+            {"enable_auto_animation": True, "auto_animation_probability": 0},
+            {"auto_animation_probability": 100, "enable_saliency": False},
+        ):
+            self.config.update(config)
+            self.assertEqual(await self.collect(self.plugin.auto_kuang(event)), [])
+        image.convert_to_file_path.assert_not_awaited()
+
+    async def test_only_actual_direct_animations_are_processed(self):
+        images = [
+            self.image("PNG", False),
+            self.image("WEBP", False),
+            self.image(),
+            self.image("WEBP"),
+        ]
+        event = self.event(images, text="看这个动图")
+        results = await self.collect(self.plugin.auto_kuang(event))
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(kind == "image" for kind, _ in results))
+        self.assertEqual(self.plugin.processor.render_path.call_count, 2)
+        self.assertEqual(event.track_temporary_local_file.call_count, 2)
+
+    async def test_probability_is_sampled_once_per_message_with_exact_boundary(self):
+        event = self.event([self.image(), self.image("WEBP")])
+        self.config["auto_animation_probability"] = 25
+        with patch.object(self.module.random, "random", return_value=0.25) as draw:
+            self.assertEqual(await self.collect(self.plugin.auto_kuang(event)), [])
+            draw.assert_called_once()
+        with patch.object(self.module.random, "random", return_value=0.249) as draw:
+            self.assertEqual(len(await self.collect(self.plugin.auto_kuang(event))), 2)
+            draw.assert_called_once()
+
+    async def test_manual_command_is_not_duplicated_and_bypasses_automatic_controls(
+        self,
+    ):
+        event = self.event([self.image()], text="框")
+        self.assertEqual(await self.collect(self.plugin.auto_kuang(event)), [])
+        self.config.update(enable_auto_animation=False, auto_animation_probability=0)
+        self.assertEqual(len(await self.collect(self.plugin.kuang(event))), 1)
+        self.plugin.processor.render_path.assert_called_once()
+
+    async def test_self_messages_and_quoted_images_are_ignored(self):
+        image = self.image()
+        self.assertEqual(
+            await self.collect(
+                self.plugin.auto_kuang(self.event([image], sender="bot"))
+            ),
+            [],
+        )
+        reply = self.module.Reply()
+        reply.chain = [image]
+        self.assertEqual(
+            await self.collect(self.plugin.auto_kuang(self.event([reply]))), []
+        )
+        image.convert_to_file_path.assert_not_awaited()
+
+    async def test_processing_errors_are_silent_and_do_not_discard_other_images(self):
+        broken = self.module.Image()
+        broken.convert_to_file_path = AsyncMock(side_effect=OSError("download failed"))
+        event = self.event([broken, self.image()])
+        results = await self.collect(self.plugin.auto_kuang(event))
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][0], "image")
+
+    async def test_channel_command_persists_into_new_session_and_plugin_reload(self):
+        event = self.event(enabled=False)
+        result = await self.collect(self.plugin.kuang_animation(event, "开启"))
+        self.assertIn("已开启", result[0][1])
+        from core.channel_settings import ChannelSettings
+
+        self.plugin.channels = ChannelSettings(self.data)
+        newer = self.event([self.image()], session="new", enabled=False)
+        self.assertEqual(len(await self.collect(self.plugin.auto_kuang(newer))), 1)
+        await self.collect(self.plugin.kuang_animation(newer, "关闭"))
+        self.assertEqual(await self.collect(self.plugin.auto_kuang(event)), [])
+        self.assertFalse(
+            self.plugin.channels.is_enabled(self.plugin.channels.key(newer))
+        )
+
+    async def test_channel_enable_explains_disabled_master_and_zero_probability(self):
+        self.config.update(enable_auto_animation=False, auto_animation_probability=0)
+        event = self.event(enabled=False)
+        result = await self.collect(self.plugin.kuang_animation(event, "开启"))
+        self.assertIn("总开关：已关闭", result[0][1])
+        self.assertIn("回复概率：0%", result[0][1])
+        self.assertIn("通用设置", result[0][1])
+
+    async def test_invalid_probability_disables_automatic_trigger(self):
+        event = self.event([self.image()])
+        for value in (-1, 101, float("nan"), float("inf"), "bad", None):
+            self.config["auto_animation_probability"] = value
+            self.assertEqual(await self.collect(self.plugin.auto_kuang(event)), [])
