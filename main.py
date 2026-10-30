@@ -80,6 +80,7 @@ class KuangPlugin(Star):
         )
         self.detector = EspBoxDetector(
             box_count=int(self.config.get("box_count", 5)),
+            head_only=bool(self.config.get("head_only", False)),
             fallback_policy=str(self.config.get("fallback_policy", "adaptive")),
             inference_num_threads=int(self.config.get("inference_num_threads", 0)),
             model_path=model_path,
@@ -314,7 +315,11 @@ class KuangPlugin(Star):
                 "请在“[框]模块管理”的通用设置中打开自动动图总开关，并设置大于 0% 的回复概率。"
             )
         if enabled and not self._has_recognition_module():
-            lines.append("还需安装并启用至少一个识别模块。")
+            lines.append(
+                "锁头模式还需安装并启用动漫识别模块。"
+                if self.config.get("head_only", False)
+                else "还需安装并启用至少一个识别模块。"
+            )
         yield event.plain_result("\n".join(lines))
 
     @filter.event_message_type(filter.EventMessageType.ALL)
@@ -339,6 +344,8 @@ class KuangPlugin(Star):
             yield result
 
     def _has_recognition_module(self) -> bool:
+        if self.config.get("head_only", False):
+            return self.modules.is_enabled("anime")
         return any(
             self.modules.is_enabled(key) for key in ("general", "saliency", "anime")
         )
@@ -353,6 +360,13 @@ class KuangPlugin(Star):
     async def _do_kuang(self, event: AstrMessageEvent, *, automatic: bool = False):
         if not self._has_recognition_module():
             if automatic:
+                return
+            if self.config.get("head_only", False):
+                yield event.plain_result(
+                    "锁头模式需要安装并启用动漫识别模块。"
+                    "请在“[框]模块管理”中启用动漫识别，或关闭通用设置中的“锁头模式”恢复锁身。"
+                    "管理员也可发送：框模块 安装 动漫。"
+                )
                 return
             yield event.plain_result(
                 "尚未启用识别模块。请在插件的“[框]模块管理”页面安装并启用通用、前景或动漫识别。"

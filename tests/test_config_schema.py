@@ -36,6 +36,7 @@ class ConfigSchemaTests(unittest.TestCase):
 
         self.assertTrue(expected.issubset(schema))
         for flag in (
+            "head_only",
             "enable_auto_animation",
             "enable_general",
             "enable_saliency",

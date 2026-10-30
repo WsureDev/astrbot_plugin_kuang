@@ -50,6 +50,7 @@ class EspBoxDetector:
         self,
         *,
         box_count: int = 5,
+        head_only: bool = False,
         model_path: str,
         model_url: str = DEFAULT_YOLO26N_MODEL_URL,
         auto_download_model: bool = True,
@@ -90,6 +91,7 @@ class EspBoxDetector:
         detection_backend: DetectionBackend | None = None,
     ) -> None:
         self.box_count = max(1, int(box_count))
+        self.head_only = bool(head_only)
         self._candidate_limit = max(12, self.box_count * 4)
         self._backend_plan = self._build_backend_plan(
             detection_backend=detection_backend,
@@ -176,7 +178,9 @@ class EspBoxDetector:
         try:
             from PIL import Image
         except ImportError as exc:
-            raise RuntimeError("缺少 Pillow 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。") from exc
+            raise RuntimeError(
+                "缺少 Pillow 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。"
+            ) from exc
 
         with Image.open(image_path) as image:
             return np.array(image.convert("RGB"))
@@ -201,6 +205,8 @@ class EspBoxDetector:
         *,
         previous_frame_rgb=None,
     ) -> DetectionPipelineResult:
+        if self.head_only:
+            return self._analyze_heads(image_rgb)
         timings: dict[str, float] = {}
         decisions: dict[str, str] = {}
 
@@ -269,6 +275,42 @@ class EspBoxDetector:
             decisions=decisions,
         )
 
+    def _analyze_heads(self, image_rgb) -> DetectionPipelineResult:
+        # Subject masks, body parts and general object boxes cannot locate a head.
+        # Run the existing head-capable model directly, without body fallback gates.
+        started = perf_counter()
+        heads = self._run_stage2(image_rgb, [])
+        anime_ms = (perf_counter() - started) * 1000
+        started = perf_counter()
+        arranged = self._arranger.arrange(
+            stage1_boxes=[],
+            stage2_boxes=heads,
+            stage2_composite_boxes=[],
+        )
+        return DetectionPipelineResult(
+            stage1_boxes=[],
+            stage2_boxes=heads,
+            stage2_composite_boxes=[],
+            arranged_boxes=arranged,
+            final_boxes=list(arranged),
+            timings_ms={
+                "anime": anime_ms,
+                "arrange": (perf_counter() - started) * 1000,
+            },
+            decisions={
+                "target": "head",
+                "primary": "skipped_head_mode",
+                "anime": (
+                    "evaluated"
+                    if self._backend_plan.mode
+                    in {"anime_only", "yolo_with_anime_fallback"}
+                    else "disabled"
+                ),
+                "saliency": "skipped_head_mode",
+                "motion": "skipped_head_mode",
+            },
+        )
+
     @staticmethod
     def _has_usable_subject(boxes: list[DetectionBox], image_rgb) -> bool:
         area = max(1, image_rgb.shape[0] * image_rgb.shape[1])
@@ -304,7 +346,9 @@ class EspBoxDetector:
         try:
             import numpy as np
         except ImportError as exc:
-            raise RuntimeError("缺少 NumPy 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。") from exc
+            raise RuntimeError(
+                "缺少 NumPy 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。"
+            ) from exc
         return np
 
     def _run_stage1(self, image_rgb) -> list[DetectionBox]:
@@ -353,7 +397,8 @@ class EspBoxDetector:
 
         person_count = sum(1 for item in stage1_boxes if item.category == "person")
         should_run = (
-            self.fallback_policy == "all"
+            self.head_only
+            or self.fallback_policy == "all"
             or person_count < self._backend_plan.anime_fallback_trigger_count
         )
         _logger.debug(
@@ -390,6 +435,11 @@ class EspBoxDetector:
         *,
         stage_name: str,
     ) -> list[DetectionBox]:
+        if self.head_only and stage_name == "stage2_anime":
+            # Filter before limiting: a crowd's torsos must not crowd out its heads.
+            detections = [
+                item for item in detections if item.category == "Head" and item.area > 0
+            ]
         limited = list(detections)[: self._candidate_limit]
         if len(limited) < len(detections):
             _logger.debug(

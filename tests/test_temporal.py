@@ -117,3 +117,20 @@ class TemporalTests(unittest.TestCase):
         self.assertEqual(len(result.final_boxes), 2)
         self.assertAlmostEqual(result.final_boxes[0].x1, 27, delta=1)
         self.assertAlmostEqual(result.final_boxes[1].x1, 148, delta=1)
+
+    def test_head_mode_tracking_preserves_head_box_without_body_parts(self):
+        from test_detector import box, make_detector
+
+        detector = make_detector(
+            anime=[box((23, 28, 69, 74), "Head"), box((10, 70, 90, 125), "Torso")],
+            head_only=True,
+        )
+        stream = GifDetectionStream(detector)
+        first = stream.analyze(make_frame())
+        tracked = stream.analyze(make_frame(3, 2), elapsed_ms=20)
+        self.assertEqual([item.category for item in first.final_boxes], ["Head"])
+        self.assertEqual([item.category for item in tracked.final_boxes], ["Head"])
+        self.assertTrue(tracked.tracked_boxes)
+        self.assertEqual(tracked.final_boxes[0].semantic_role, "anime_head")
+        self.assertAlmostEqual(tracked.final_boxes[0].x1, 26, delta=1)
+        self.assertEqual(detector._backend_plan.secondary_backend.calls, 1)

@@ -54,6 +54,7 @@ MODULES = {
 _ACTIVE_PHASES = {"queued", "installing", "downloading", "validating"}
 _ROOT = Path(__file__).resolve().parents[1]
 _COMMON_SETTINGS = {
+    "head_only",
     "enable_auto_animation",
     "auto_animation_probability",
     "box_count",

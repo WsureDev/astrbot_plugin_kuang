@@ -163,6 +163,48 @@ class PluginModuleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["status"], "error")
         self.assertEqual(len((await self.plugin._api_modules())["modules"]), 4)
 
+    async def test_head_toggle_rebuilds_pipeline_without_changing_other_preferences(
+        self,
+    ):
+        for key in ("general", "anime", "saliency"):
+            self.add_model(key)
+        self.config.update(
+            enable_general=True,
+            enable_anime_fallback=True,
+            enable_saliency=True,
+            enable_gif_acceleration=True,
+            auto_animation_probability=37,
+        )
+        self.plugin._configure_pipeline()
+        original_config = dict(self.config)
+        original_processor = self.plugin.processor
+        self.plugin.modules.save_settings("common", {"head_only": True})
+        self.assertTrue(self.plugin.detector.head_only)
+        self.assertTrue(self.plugin._has_recognition_module())
+        self.assertEqual(self.plugin.processor.gif_detection_interval, 4)
+        self.assertIsNot(self.plugin.processor, original_processor)
+        self.assertFalse(original_processor.detector.head_only)
+        self.assertEqual(self.config, {**original_config, "head_only": True})
+        self.plugin.modules.save_settings("common", {"head_only": False})
+        self.assertFalse(self.plugin.detector.head_only)
+        self.assertEqual(self.config, original_config)
+
+    async def test_head_mode_requires_anime_module_even_if_general_is_enabled(self):
+        self.add_model("general")
+        self.config.update(enable_general=True, head_only=True)
+        self.plugin._configure_pipeline()
+        self.assertFalse(self.plugin._has_recognition_module())
+        event = types.SimpleNamespace(plain_result=lambda message: message)
+        replies = [value async for value in self.plugin._do_kuang(event)]
+        self.assertEqual(len(replies), 1)
+        self.assertIn("锁头模式需要安装并启用动漫识别模块", replies[0])
+        self.assertEqual(
+            [value async for value in self.plugin._do_kuang(event, automatic=True)], []
+        )
+        self.assertFalse(
+            self.plugin.detector._backend_plan.primary_backend.auto_download_model
+        )
+
 
 class AutomaticAnimationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -317,3 +359,13 @@ class AutomaticAnimationTests(unittest.IsolatedAsyncioTestCase):
         for value in (-1, 101, float("nan"), float("inf"), "bad", None):
             self.config["auto_animation_probability"] = value
             self.assertEqual(await self.collect(self.plugin.auto_kuang(event)), [])
+
+    async def test_head_mode_automatic_trigger_respects_anime_module_availability(self):
+        self.config["head_only"] = True
+        image = self.image("WEBP")
+        event = self.event([image])
+        self.assertEqual(await self.collect(self.plugin.auto_kuang(event)), [])
+        image.convert_to_file_path.assert_not_awaited()
+        PluginModuleTests.add_model(self, "anime")
+        self.config["enable_anime_fallback"] = True
+        self.assertEqual(len(await self.collect(self.plugin.auto_kuang(event))), 1)
