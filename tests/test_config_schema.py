@@ -1,5 +1,4 @@
 import json
-import re
 import unittest
 from pathlib import Path
 
@@ -8,7 +7,6 @@ class ConfigSchemaTests(unittest.TestCase):
     def test_stage3_and_stage4_options_are_wired(self):
         root = Path(__file__).resolve().parents[1]
         schema = json.loads((root / "_conf_schema.json").read_text())
-        main_text = (root / "main.py").read_text()
         expected = {
             "enable_saliency",
             "saliency_model_path",
@@ -37,14 +35,19 @@ class ConfigSchemaTests(unittest.TestCase):
         }
 
         self.assertTrue(expected.issubset(schema))
-        self.assertTrue(schema["enable_saliency"]["default"])
+        for flag in (
+            "enable_general",
+            "enable_saliency",
+            "enable_anime_fallback",
+            "enable_gif_acceleration",
+        ):
+            self.assertFalse(schema[flag]["default"])
         self.assertFalse(schema["enable_motion"]["default"])
         self.assertFalse(schema["saliency_preserve_aspect_ratio"]["default"])
         self.assertEqual(schema["saliency_max_foreground_ratio"]["default"], 0.995)
         self.assertEqual(schema["saliency_intra_op_num_threads"]["default"], 0)
         self.assertTrue(schema["saliency_minmax_normalize_output"]["default"])
-        for key in expected:
-            self.assertRegex(main_text, rf'config\.get\("{re.escape(key)}"')
+        self.assertFalse((root / "requirements.txt").exists())
 
 
 if __name__ == "__main__":

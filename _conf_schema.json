@@ -1,4 +1,16 @@
 {
+  "enable_general": {
+    "description": "启用通用识别",
+    "hint": "先在模块管理页面安装并启用。关闭时保留已安装资源。",
+    "type": "bool",
+    "default": false
+  },
+  "enable_gif_acceleration": {
+    "description": "启用 GIF 加速",
+    "hint": "先安装 GIF 加速模块。关闭时仍可逐帧识别 GIF。",
+    "type": "bool",
+    "default": false
+  },
   "box_count": {
     "description": "主体框数量上限",
     "hint": "最多保留的主体框数量，默认 5。无可靠主体时不绘框。",
@@ -25,49 +37,50 @@
   },
   "detector_backend": {
     "description": "识别器后端",
-    "hint": "默认使用 yolo26n。高级用法下也支持 cascade_yolo26n_anime，用于开启二次元补强兜底。",
+    "hint": "仅用于迁移旧配置，新的识别组合由模块开关决定。",
     "type": "string",
-    "default": "yolo26n"
+    "default": "yolo26n",
+    "invisible": true
   },
   "model_path": {
     "description": "YOLO26n 模型文件路径",
-    "hint": "留空时使用插件数据目录下的 models/yolo26n.onnx。若文件不存在且开启自动下载，将自动拉取官方模型。",
+    "hint": "留空使用插件数据目录下的默认模型路径；可指定已有 ONNX 模型文件。",
     "type": "string",
     "default": ""
   },
   "model_url": {
     "description": "YOLO26n 模型下载地址",
-    "hint": "默认使用官方 Ultralytics 资源地址。仅在 auto_download_model 开启且本地缺少模型文件时使用。",
+    "hint": "模块安装时使用的模型下载地址，支持自行配置镜像。已有有效模型会直接复用。",
     "type": "string",
     "default": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.onnx"
   },
   "auto_download_model": {
     "description": "自动下载 YOLO26n 模型",
-    "hint": "开启后，首次缺少模型文件时会自动下载到插件数据目录。",
+    "hint": "仅在点击“安装并启用”时下载缺失或损坏的模型。关闭后需要手动放置模型；处理图片不会自动下载。",
     "type": "bool",
     "default": true
   },
   "enable_anime_fallback": {
-    "description": "启用二次元检测兜底",
-    "hint": "默认关闭，保留 Head / Torso / Legs 模型。开启后按需补强动漫人物，独立大头特写也可作为主体。",
+    "description": "启用动漫识别",
+    "hint": "先在模块管理页面安装并启用。保留 Head / Torso / Legs 检测，也可以单独使用，支持大头特写。",
     "type": "bool",
     "default": false
   },
   "anime_model_path": {
     "description": "动漫 YOLO 模型文件路径",
-    "hint": "留空时默认使用插件数据目录下的 models/anime_yolo.onnx。当前默认模型是二次元部位检测，类别为 Head / Torso / Legs。",
+    "hint": "留空使用插件数据目录下的默认模型路径；可指定已有 ONNX 模型文件。",
     "type": "string",
     "default": ""
   },
   "anime_model_url": {
     "description": "动漫 YOLO 模型下载地址",
-    "hint": "仅在开启二次元检测兜底且 anime_auto_download_model 为 true 时使用。默认使用现成的 Hugging Face ONNX 地址。",
+    "hint": "模块安装时使用的模型下载地址，支持自行配置镜像。已有有效模型会直接复用。",
     "type": "string",
     "default": "https://huggingface.co/laowanglaowang/yolov11m_anime_Image_segmentation/resolve/main/best.onnx"
   },
   "anime_auto_download_model": {
     "description": "自动下载动漫 YOLO 模型",
-    "hint": "开启后，若本地缺少动漫模型文件，会尝试从 anime_model_url 下载。",
+    "hint": "仅在点击“安装并启用”时下载缺失或损坏的模型。关闭后需要手动放置模型；处理图片不会自动下载。",
     "type": "bool",
     "default": true
   },
@@ -102,26 +115,26 @@
     "default": 0.45
   },
   "enable_saliency": {
-    "description": "启用显著性检测（阶段3）",
-    "hint": "默认开启。主体检测不足时用 U²-Net-p 提取前景，覆盖未知角色、卡通和玩偶。",
+    "description": "启用前景识别",
+    "hint": "先在模块管理页面安装并启用。适合主体不明确的图片、卡通和玩偶。",
     "type": "bool",
-    "default": true
+    "default": false
   },
   "saliency_model_path": {
     "description": "显著性模型文件路径",
-    "hint": "留空时使用插件数据目录下的 models/u2netp.onnx。开启 saliency_auto_download_model 时会自动下载。",
+    "hint": "留空使用插件数据目录下的默认模型路径；可指定已有 ONNX 模型文件。",
     "type": "string",
     "default": ""
   },
   "saliency_model_url": {
     "description": "显著性模型下载地址",
-    "hint": "默认使用 rembg 发布的 U²-Net-p ONNX 地址。仅在 saliency_auto_download_model 开启且本地缺少模型时使用。",
+    "hint": "模块安装时使用的模型下载地址，支持自行配置镜像。已有有效模型会直接复用。",
     "type": "string",
     "default": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx"
   },
   "saliency_auto_download_model": {
     "description": "自动下载显著性模型",
-    "hint": "开启后，若本地缺少显著性模型，会尝试从 saliency_model_url 下载。",
+    "hint": "仅在点击“安装并启用”时下载缺失或损坏的模型。关闭后需要手动放置模型；处理图片不会自动下载。",
     "type": "bool",
     "default": true
   },
@@ -181,7 +194,7 @@
   },
   "enable_motion": {
     "description": "启用运动检测（阶段4，仅 GIF）",
-    "hint": "默认关闭。开启后 GIF 会用帧差捕捉移动物体，静态图片不受影响。",
+    "hint": "需先启用 GIF 加速模块。用帧差补充移动主体，默认关闭。",
     "type": "bool",
     "default": false
   },
@@ -259,7 +272,7 @@
   },
   "gif_detection_interval": {
     "description": "GIF 完整检测间隔帧数",
-    "hint": "默认每 4 帧重检；中间帧用光流跟踪，跟踪失效立即重检。设为 1 则每帧检测。",
+    "hint": "仅在启用 GIF 加速时生效。默认每 4 帧重检，跟踪失效立即重检；1 表示逐帧检测。",
     "type": "int",
     "default": 4
   },

@@ -15,6 +15,7 @@ from .core import (
     configure_logger,
     get_logger,
 )
+from .core.module_manager import ModuleManager
 
 _PLUGIN_NAME = "astrbot_plugin_kuang"
 _DEFAULT_QQ_AVATAR = "https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
@@ -27,7 +28,7 @@ _logger = get_logger(_PLUGIN_NAME)
     "kuang",
     "WsureDev",
     "为图片叠加 FPS 外挂透视风格白色线框",
-    "0.8.0",
+    "0.9.0",
     "https://github.com/WsureDev/astrbot_plugin_kuang",
 )
 class KuangPlugin(Star):
@@ -35,7 +36,9 @@ class KuangPlugin(Star):
         super().__init__(context)
         self.config = config
         self.debug_mode = bool(self.config.get("debug_mode", False))
-        configure_logger(logger, plugin_name=_PLUGIN_NAME, debug_enabled=self.debug_mode)
+        configure_logger(
+            logger, plugin_name=_PLUGIN_NAME, debug_enabled=self.debug_mode
+        )
         if self.debug_mode:
             logger.info(f"[{_PLUGIN_NAME}] debug_mode=True，调试日志已开启")
         self.plugin_data_dir = StarTools.get_data_dir(_PLUGIN_NAME)
@@ -44,34 +47,26 @@ class KuangPlugin(Star):
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.model_dir.mkdir(parents=True, exist_ok=True)
 
-        configured_model_path = str(self.config.get("model_path", "")).strip()
-        model_path = (
-            configured_model_path
-            if configured_model_path
-            else str(self.model_dir / "yolo26n.onnx")
+        self.modules = ModuleManager(
+            self.plugin_data_dir, self.config, self._configure_pipeline
         )
-        configured_anime_model_path = str(
-            self.config.get("anime_model_path", "")
-        ).strip()
-        anime_model_path = (
-            configured_anime_model_path
-            if configured_anime_model_path
-            else str(self.model_dir / "anime_yolo.onnx")
+        self._configure_pipeline()
+        self._register_module_api()
+
+    def _configure_pipeline(self):
+        self.debug_mode = bool(self.config.get("debug_mode", False))
+        configure_logger(
+            logger, plugin_name=_PLUGIN_NAME, debug_enabled=self.debug_mode
         )
-        configured_saliency_model_path = str(
-            self.config.get("saliency_model_path", "")
-        ).strip()
-        saliency_model_path = (
-            configured_saliency_model_path
-            if configured_saliency_model_path
-            else str(self.model_dir / "u2netp.onnx")
-        )
-        detector_backend = str(self.config.get("detector_backend", "yolo26n")).strip()
-        enable_anime_fallback = bool(self.config.get("enable_anime_fallback", False))
+        model_path = str(self.modules.model_path("general"))
+        anime_model_path = str(self.modules.model_path("anime"))
+        saliency_model_path = str(self.modules.model_path("saliency"))
+        general = self.modules.is_enabled("general")
+        anime = self.modules.is_enabled("anime")
+        detector_backend = "yolo26n" if general else "anime_yolo" if anime else "none"
+        enable_anime_fallback = general and anime
         anime_model_url = str(self.config.get("anime_model_url", "")).strip()
-        anime_auto_download_model = bool(
-            self.config.get("anime_auto_download_model", True)
-        )
+        anime_auto_download_model = False
         _logger.debug(
             f"detector config: backend={detector_backend}, "
             f"enable_anime_fallback={enable_anime_fallback}, "
@@ -85,10 +80,8 @@ class KuangPlugin(Star):
             inference_num_threads=int(self.config.get("inference_num_threads", 0)),
             model_path=model_path,
             model_url=str(self.config.get("model_url", "")).strip(),
-            auto_download_model=bool(self.config.get("auto_download_model", True)),
-            confidence_threshold=float(
-                self.config.get("confidence_threshold", 0.25)
-            ),
+            auto_download_model=False,
+            confidence_threshold=float(self.config.get("confidence_threshold", 0.25)),
             nms_iou_threshold=float(self.config.get("detector_iou_threshold", 0.45)),
             model_input_size=int(self.config.get("model_input_size", 640)),
             backend_name=detector_backend,
@@ -102,35 +95,25 @@ class KuangPlugin(Star):
             anime_nms_iou_threshold=float(
                 self.config.get("anime_detector_iou_threshold", 0.45)
             ),
-            anime_model_input_size=int(
-                self.config.get("anime_model_input_size", 640)
-            ),
+            anime_model_input_size=int(self.config.get("anime_model_input_size", 640)),
             anime_fallback_trigger_count=int(
                 self.config.get("anime_fallback_trigger_count", 2)
             ),
             anime_merge_iou_threshold=float(
                 self.config.get("anime_merge_iou_threshold", 0.45)
             ),
-            enable_saliency=bool(self.config.get("enable_saliency", True)),
+            enable_saliency=self.modules.is_enabled("saliency"),
             saliency_model_path=saliency_model_path,
-            saliency_model_url=str(
-                self.config.get("saliency_model_url", "")
-            ).strip(),
-            saliency_auto_download_model=bool(
-                self.config.get("saliency_auto_download_model", True)
-            ),
+            saliency_model_url=str(self.config.get("saliency_model_url", "")).strip(),
+            saliency_auto_download_model=False,
             saliency_model_input_size=int(
                 self.config.get("saliency_model_input_size", 320)
             ),
-            saliency_threshold=float(
-                self.config.get("saliency_threshold", 0.5)
-            ),
+            saliency_threshold=float(self.config.get("saliency_threshold", 0.5)),
             saliency_min_area_ratio=float(
                 self.config.get("saliency_min_area_ratio", 0.005)
             ),
-            saliency_max_boxes=int(
-                self.config.get("saliency_max_boxes", 8)
-            ),
+            saliency_max_boxes=int(self.config.get("saliency_max_boxes", 8)),
             saliency_max_foreground_ratio=float(
                 self.config.get("saliency_max_foreground_ratio", 0.995)
             ),
@@ -146,10 +129,9 @@ class KuangPlugin(Star):
             saliency_minmax_normalize_output=bool(
                 self.config.get("saliency_minmax_normalize_output", True)
             ),
-            enable_motion=bool(self.config.get("enable_motion", False)),
-            motion_diff_threshold=int(
-                self.config.get("motion_diff_threshold", 25)
-            ),
+            enable_motion=self.modules.is_enabled("gif")
+            and bool(self.config.get("enable_motion", False)),
+            motion_diff_threshold=int(self.config.get("motion_diff_threshold", 25)),
             motion_min_area_ratio=float(
                 self.config.get("motion_min_area_ratio", 0.005)
             ),
@@ -157,9 +139,7 @@ class KuangPlugin(Star):
             motion_downscale_long_edge=int(
                 self.config.get("motion_downscale_long_edge", 240)
             ),
-            motion_dilate_radius=int(
-                self.config.get("motion_dilate_radius", 4)
-            ),
+            motion_dilate_radius=int(self.config.get("motion_dilate_radius", 4)),
         )
         self.renderer = EspBoxRenderer(
             line_width=int(self.config.get("line_width", 3)),
@@ -169,13 +149,128 @@ class KuangPlugin(Star):
             detector=self.detector,
             renderer=self.renderer,
             output_dir=self.output_dir,
-            gif_detection_interval=int(self.config.get("gif_detection_interval", 4)),
+            gif_detection_interval=(
+                int(self.config.get("gif_detection_interval", 4))
+                if self.modules.is_enabled("gif")
+                else 1
+            ),
             gif_max_reuse_ms=int(self.config.get("gif_max_reuse_ms", 240)),
         )
 
-        self._processing_slots = asyncio.Semaphore(
-            max(1, int(self.config.get("max_concurrent_images", 1)))
-        )
+        limit = max(1, int(self.config.get("max_concurrent_images", 1)))
+        if getattr(self, "_processing_limit", None) != limit:
+            self._processing_slots = asyncio.Semaphore(limit)
+            self._processing_limit = limit
+
+    def _register_module_api(self):
+        register_api = getattr(self.context, "register_web_api", None)
+        if not callable(register_api):
+            return
+        for route, handler, methods in (
+            ("modules", self._api_modules, ["GET"]),
+            ("modules/action", self._api_module_action, ["POST"]),
+            ("modules/settings", self._api_module_settings, ["POST"]),
+        ):
+            register_api(f"/{_PLUGIN_NAME}/{route}", handler, methods, "框模块管理")
+
+    @staticmethod
+    async def _request_json():
+        try:
+            from astrbot.api.web import request
+        except ImportError:
+            from quart import request
+
+            return await request.get_json()
+        return await request.json(default={})
+
+    async def _api_modules(self):
+        return self.modules.snapshot()
+
+    async def _api_module_action(self):
+        try:
+            body = await self._request_json()
+            if not isinstance(body, dict):
+                raise ValueError("请求必须是 JSON 对象。")
+            module_id, action = body.get("module"), body.get("action")
+            if action == "disable":
+                return self.modules.disable(module_id)
+            if action in {"install", "enable"}:
+                return self.modules.start_install(
+                    module_id, install=action == "install"
+                )
+            raise ValueError("不支持的模块操作。")
+        except (ValueError, TypeError) as exc:
+            return {"status": "error", "message": str(exc)}, 400
+
+    async def _api_module_settings(self):
+        try:
+            body = await self._request_json()
+            if not isinstance(body, dict):
+                raise ValueError("请求必须是 JSON 对象。")
+            module_id = body.get("module", "common")
+            if "values" in body:
+                return self.modules.save_settings(module_id, body["values"])
+            return self.modules.settings(module_id)
+        except (ValueError, TypeError) as exc:
+            return {"status": "error", "message": str(exc)}, 400
+
+    @filter.command("框模块")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def kuang_modules(
+        self, event: AstrMessageEvent, action: str = "状态", module: str = ""
+    ):
+        aliases = {
+            "通用": "general",
+            "前景": "saliency",
+            "动漫": "anime",
+            "GIF": "gif",
+            "gif": "gif",
+        }
+        module_id = aliases.get(module, module)
+        try:
+            if action == "安装":
+                self.modules.start_install(module_id)
+            elif action == "启用":
+                self.modules.start_install(module_id, install=False)
+            elif action == "关闭":
+                self.modules.disable(module_id)
+            elif action != "状态":
+                raise ValueError(
+                    "用法：框模块 状态 / 安装 / 启用 / 关闭 [通用|前景|动漫|GIF]"
+                )
+            yield event.plain_result(self._module_status_text())
+        except (ValueError, TypeError) as exc:
+            yield event.plain_result(str(exc))
+
+    def _module_status_text(self):
+        phases = {
+            "not_installed": "未安装",
+            "installed": "已安装，未启用",
+            "enabled": "已启用",
+            "queued": "排队中",
+            "installing": "安装依赖",
+            "downloading": "下载模型",
+            "validating": "加载验证",
+            "error": "安装失败",
+            "interrupted": "安装中断",
+            "restart_required": "需要重启 AstrBot",
+        }
+        lines = ["框 · 模块状态"]
+        for item in self.modules.snapshot()["modules"]:
+            line = f"{item['name']}：{phases.get(item['phase'], item['phase'])}"
+            if item["phase"] == "downloading":
+                total, done = item["total_bytes"], item["downloaded_bytes"]
+                line += (
+                    f" {done / total:.0%}" if total else f" {done / 1048576:.1f} MiB"
+                )
+            if item["phase"] in {"error", "interrupted", "restart_required"}:
+                line += f"\n  {item['message']}"
+            lines.append(line)
+        lines.append("安装进度可在模块管理页面实时查看，或再次发送“框模块 状态”。")
+        return "\n".join(lines)
+
+    async def terminate(self):
+        await self.modules.close()
 
     @filter.regex(r"框")
     async def kuang(self, event: AstrMessageEvent):
@@ -185,6 +280,14 @@ class KuangPlugin(Star):
             yield result
 
     async def _do_kuang(self, event: AstrMessageEvent):
+        if not any(
+            self.modules.is_enabled(key) for key in ("general", "saliency", "anime")
+        ):
+            yield event.plain_result(
+                "尚未启用识别模块。请在插件的“模块管理”页面安装并启用通用、前景或动漫识别。"
+                "管理员也可发送：框模块 安装 前景；发送“框模块 状态”查看进度。"
+            )
+            return
         direct_images = self._collect_direct_images(event)
         reply_images = [] if direct_images else self._collect_reply_images(event)
         image_targets = direct_images or reply_images
@@ -272,7 +375,9 @@ class KuangPlugin(Star):
         if not target_user_id:
             for attr_name in ("avatar", "avatar_url", "face_url", "face"):
                 avatar_value = str(getattr(sender, attr_name, "") or "").strip()
-                if avatar_value.startswith("http://") or avatar_value.startswith("https://"):
+                if avatar_value.startswith("http://") or avatar_value.startswith(
+                    "https://"
+                ):
                     _logger.debug(
                         f"avatar target resolved from sender.{attr_name}: {avatar_value}"
                     )

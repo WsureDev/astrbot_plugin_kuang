@@ -29,7 +29,7 @@ class EspBoxProcessor:
         try:
             from PIL import Image
         except ImportError as exc:
-            raise RuntimeError("缺少 Pillow 依赖，请先安装 requirements.txt。") from exc
+            raise RuntimeError("缺少 Pillow 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。") from exc
 
         _logger.debug("[processor] render_path start: %s", image_path)
         with Image.open(image_path) as image:
@@ -74,7 +74,7 @@ class EspBoxProcessor:
             import numpy as np
             from PIL import Image, ImageSequence
         except ImportError as exc:
-            raise RuntimeError("缺少图片处理依赖，请先安装 requirements.txt。") from exc
+            raise RuntimeError("缺少图片处理依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。") from exc
 
         rendered_frames = []
         durations: list[int] = []

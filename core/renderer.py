@@ -23,7 +23,7 @@ class EspBoxRenderer:
         try:
             from PIL import Image
         except ImportError as exc:
-            raise RuntimeError("缺少 Pillow 依赖，请先安装 requirements.txt。") from exc
+            raise RuntimeError("缺少 Pillow 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。") from exc
 
         os.makedirs(output_dir, exist_ok=True)
         _logger.debug(
@@ -163,7 +163,7 @@ class EspBoxRenderer:
         try:
             from PIL import Image
         except ImportError as exc:
-            raise RuntimeError("缺少 Pillow 依赖，请先安装 requirements.txt。") from exc
+            raise RuntimeError("缺少 Pillow 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。") from exc
 
         os.makedirs(output_dir, exist_ok=True)
         prepared_frames = [

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>框 · 模块管理</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">框 / 能力模块</div>
+      <h1>需要什么，就开启什么。</h1>
+      <p>本体已就绪。安装一个识别模块即可开始画框，共享依赖只安装一次。</p>
+    </header>
+    <div id="notice" role="status" aria-live="polite" hidden></div>
+    <section class="guide" aria-label="安装说明">
+      <span class="core-badge">本体已安装</span>
+      <p>常见目标选通用识别，主体不明确选前景识别，动漫大头选动漫识别。GIF 加速可以之后再装。</p>
+    </section>
+    <section id="modules" class="grid" aria-label="能力模块" aria-busy="true"></section>
+    <details id="common" class="common">
+      <summary>通用设置 <span>线框样式、并发与识别策略</span></summary>
+      <form class="settings" data-module="common"></form>
+    </details>
+    <footer>
+      模型下载显示实际进度；依赖安装和加载验证显示当前步骤。关闭页面不会中止安装。<br>
+      首次安装识别模块需要下载共享运行库，体积取决于系统；关闭模块会保留资源，再开启无需重复下载。
+    </footer>
+  </main>
+  <template id="module-card">
+    <article class="card">
+      <div class="card-top"><span class="module-number"></span><span class="badge"></span></div>
+      <h2></h2><p class="description"></p><p class="size"></p>
+      <div class="progress-area" hidden>
+        <div class="steps" aria-label="安装阶段"><span>依赖安装</span><span>模型下载</span><span>加载验证</span></div>
+        <progress max="100" aria-label="安装进度"></progress>
+        <div class="progress-label" aria-live="polite"></div>
+      </div>
+      <p class="message"></p>
+      <div class="actions"><button type="button" class="primary"></button></div>
+      <details class="module-settings" hidden><summary>模块设置</summary><form class="settings"></form></details>
+      <details class="logs" hidden><summary>安装日志</summary><pre></pre></details>
+    </article>
+  </template>
+</body>
+</html>

@@ -203,7 +203,7 @@ class BaseYoloOnnxDetectionBackend:
                 import numpy as np
             except ImportError as exc:
                 raise RuntimeError(
-                    "缺少 NumPy 依赖，请先安装 requirements.txt。"
+                    "缺少 NumPy 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。"
                 ) from exc
             self._np = np
         return self._np
@@ -214,7 +214,7 @@ class BaseYoloOnnxDetectionBackend:
                 import onnxruntime as ort
             except ImportError as exc:
                 raise RuntimeError(
-                    "缺少 onnxruntime 依赖，请先安装 requirements.txt。"
+                    "缺少 onnxruntime 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。"
                 ) from exc
             self._ort = ort
         return self._ort
@@ -434,7 +434,7 @@ class BaseYoloOnnxDetectionBackend:
         try:
             from PIL import Image
         except ImportError as exc:
-            raise RuntimeError("缺少 Pillow 依赖，请先安装 requirements.txt。") from exc
+            raise RuntimeError("缺少 Pillow 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。") from exc
 
         image_height, image_width = image_rgb.shape[:2]
         input_width, input_height = self._input_size

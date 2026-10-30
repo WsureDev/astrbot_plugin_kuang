@@ -158,7 +158,7 @@ class MotionDetectionBackend:
             try:
                 import numpy as np
             except ImportError as exc:
-                raise RuntimeError("缺少 NumPy 依赖，请先安装 requirements.txt。") from exc
+                raise RuntimeError("缺少 NumPy 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。") from exc
             self._np = np
         return self._np
 
@@ -174,7 +174,7 @@ class MotionDetectionBackend:
         try:
             from PIL import Image
         except ImportError as exc:
-            raise RuntimeError("缺少 Pillow 依赖，请先安装 requirements.txt。") from exc
+            raise RuntimeError("缺少 Pillow 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。") from exc
         np = self.load_numpy()
         resized = Image.fromarray(image).resize(
             (target_width, target_height),

@@ -77,7 +77,7 @@ class CascadeDetectionBackend:
         try:
             import numpy as np
         except ImportError as exc:
-            raise RuntimeError("缺少 NumPy 依赖，请先安装 requirements.txt。") from exc
+            raise RuntimeError("缺少 NumPy 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。") from exc
         return np
 
     def _merge_detections(

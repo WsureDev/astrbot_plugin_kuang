@@ -176,7 +176,7 @@ class EspBoxDetector:
         try:
             from PIL import Image
         except ImportError as exc:
-            raise RuntimeError("缺少 Pillow 依赖，请先安装 requirements.txt。") from exc
+            raise RuntimeError("缺少 Pillow 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。") from exc
 
         with Image.open(image_path) as image:
             return np.array(image.convert("RGB"))
@@ -304,7 +304,7 @@ class EspBoxDetector:
         try:
             import numpy as np
         except ImportError as exc:
-            raise RuntimeError("缺少 NumPy 依赖，请先安装 requirements.txt。") from exc
+            raise RuntimeError("缺少 NumPy 依赖，请在模块管理中安装识别模块（命令行开发使用 requirements/dev.txt）。") from exc
         return np
 
     def _run_stage1(self, image_rgb) -> list[DetectionBox]:
@@ -505,6 +505,14 @@ class EspBoxDetector:
             )
 
         resolved_backend_name = str(backend_name or "yolo26n").strip().lower()
+        if resolved_backend_name == "none":
+            return _DetectorBackendPlan(
+                mode="disabled",
+                primary_backend=None,
+                secondary_backend=None,
+                anime_fallback_trigger_count=1,
+                ignore_secondary_errors=True,
+            )
         _logger.debug(
             "[detector] build backend request: backend=%s enable_anime_fallback=%s",
             resolved_backend_name,
